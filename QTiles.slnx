@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/QTiles.Cli/QTiles.Cli.csproj" />
+    <Project Path="src/QTiles.Core/QTiles.Core.csproj" />
+    <Project Path="src/QTiles.Editor.Wpf/QTiles.Editor.Wpf.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/QTiles.Cli.Tests/QTiles.Cli.Tests.csproj" />
+    <Project Path="tests/QTiles.Core.Tests/QTiles.Core.Tests.csproj" />
+  </Folder>
+</Solution>

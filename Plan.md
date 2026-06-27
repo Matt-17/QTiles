@@ -1,15 +1,15 @@
 # Implementation checklist
 
-- [ ] Milestone 1: skeleton
-- [ ] Milestone 2: config and YAML
-- [ ] Milestone 3: geo math and transforms
-- [ ] Milestone 4: NetVips renderer
-- [ ] Milestone 5: TileJSON
-- [ ] Milestone 6: WPF shell
-- [ ] Milestone 7: Mapsui world map
-- [ ] Milestone 8: image pane
-- [ ] Milestone 9: solve + visual feedback
-- [ ] Milestone 10: render from editor
+- [x] Milestone 1: skeleton
+- [x] Milestone 2: config and YAML
+- [x] Milestone 3: geo math and transforms
+- [x] Milestone 4: NetVips renderer
+- [x] Milestone 5: TileJSON
+- [x] Milestone 6: WPF shell
+- [x] Milestone 7: Mapsui world map
+- [x] Milestone 8: image pane
+- [x] Milestone 9: solve + visual feedback
+- [x] Milestone 10: render from editor
 
 # QTiles implementation plan for Codex
 
