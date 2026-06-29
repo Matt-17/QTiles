@@ -45,6 +45,7 @@ public sealed class RenderConfig
 {
     public string Scheme { get; set; } = "xyz";
     public int TileSize { get; set; } = 256;
+    public bool? AutoZoom { get; set; }
     public int MinZoom { get; set; }
     public int MaxZoom { get; set; }
     public string Format { get; set; } = "png";

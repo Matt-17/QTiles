@@ -19,6 +19,10 @@
         <SolidColorBrush x:Key="Accent" Color="#3BAA8D" />
         <SolidColorBrush x:Key="AccentBlue" Color="#5C8EF2" />
         <SolidColorBrush x:Key="Danger" Color="#EF6461" />
+        <SolidColorBrush x:Key="MarkerGood" Color="#3BAA8D" />
+        <SolidColorBrush x:Key="MarkerWarning" Color="#E0AD44" />
+        <SolidColorBrush x:Key="MarkerError" Color="#EF6461" />
+        <SolidColorBrush x:Key="MarkerDisabled" Color="#696969" />
 
         <Style TargetType="Button">
             <Setter Property="Background" Value="#303640" />
@@ -361,6 +365,15 @@
             <Setter Property="Margin" Value="0,10,0,4" />
         </Style>
 
+        <Style x:Key="LegendSwatch" TargetType="Ellipse">
+            <Setter Property="Width" Value="11" />
+            <Setter Property="Height" Value="11" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Stroke" Value="#E8EDF2" />
+            <Setter Property="StrokeThickness" Value="1" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
         <Style x:Key="GridText" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="Padding" Value="0" />
@@ -384,13 +397,14 @@
 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="QTiles" Foreground="{StaticResource TextStrong}" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,18,0" />
-                    <Button Content="Open" Command="{Binding OpenCommand}" />
+                    <Button Content="Open..." Command="{Binding OpenCommand}" ToolTip="Open a QTiles YAML project or choose a source image" />
                     <Button Content="Save" Command="{Binding SaveCommand}" />
+                    <Button Content="Image..." Command="{Binding ChooseSourceImageCommand}" ToolTip="Choose the source image for this project" />
                     <Button Content="Validate" Command="{Binding ValidateCommand}" />
                     <Button Content="Solve" Command="{Binding SolveCommand}" />
                     <Button Content="Render" Command="{Binding RenderCommand}" Style="{StaticResource RenderButton}" IsEnabled="{Binding CanRender}" />
                     <ToggleButton Content="Preview" IsChecked="{Binding IsPreviewEnabled}" Style="{StaticResource PreviewToggleButton}" />
-                    <Button Content="Cancel" Command="{Binding CancelRenderCommand}" />
+                    <Button Content="Cancel render" Command="{Binding CancelRenderCommand}" IsEnabled="{Binding IsRendering}" ToolTip="Stops the active render job" />
                     <Button Content="Output" Command="{Binding OpenOutputCommand}" />
                     <ComboBox ItemsSource="{Binding EditorModes}"
                               SelectedItem="{Binding EditorMode}"
@@ -505,6 +519,9 @@
                           x:Name="ImagePane"
                           Background="#15191F"
                           ClipToBounds="True"
+                          AllowDrop="True"
+                          PreviewDragOver="SourceImageDropTarget_PreviewDragOver"
+                          PreviewDrop="SourceImageDropTarget_Drop"
                           MouseLeftButtonDown="ImagePane_MouseLeftButtonDown"
                           MouseLeftButtonUp="ImagePane_MouseLeftButtonUp"
                           MouseMove="ImagePane_MouseMove"
@@ -516,6 +533,9 @@
                                 BorderBrush="#59616C"
                                 BorderThickness="1"
                                 Background="#0F1318"
+                                AllowDrop="True"
+                                PreviewDragOver="SourceImageDropTarget_PreviewDragOver"
+                                PreviewDrop="SourceImageDropTarget_Drop"
                                 RenderTransformOrigin="0.5,0.5">
                             <Border.RenderTransform>
                                 <TransformGroup>
@@ -526,10 +546,19 @@
                             </Border.RenderTransform>
                             <Grid>
                                 <Image x:Name="SourceImageElement"
-                                       Stretch="Fill"
+                                       Stretch="Uniform"
+                                       StretchDirection="Both"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       AllowDrop="True"
+                                       PreviewDragOver="SourceImageDropTarget_PreviewDragOver"
+                                       PreviewDrop="SourceImageDropTarget_Drop"
                                        SnapsToDevicePixels="True" />
                                 <Canvas x:Name="ImageOverlay"
+                                        AllowDrop="True"
                                         Background="Transparent"
+                                        PreviewDragOver="SourceImageDropTarget_PreviewDragOver"
+                                        PreviewDrop="SourceImageDropTarget_Drop"
                                         MouseLeftButtonDown="ImageOverlay_MouseLeftButtonDown"
                                         SizeChanged="Overlay_SizeChanged" />
                             </Grid>
@@ -548,7 +577,24 @@
                         <TextBox Text="{Binding ProjectName, UpdateSourceTrigger=PropertyChanged}" />
 
                         <TextBlock Text="Source image" Style="{StaticResource FieldLabel}" />
-                        <TextBox Text="{Binding SourceImage, UpdateSourceTrigger=PropertyChanged}" />
+                        <Grid AllowDrop="True"
+                              PreviewDragOver="SourceImageDropTarget_PreviewDragOver"
+                              PreviewDrop="SourceImageDropTarget_Drop">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding SourceImage, UpdateSourceTrigger=PropertyChanged}"
+                                     AllowDrop="True"
+                                     PreviewDragOver="SourceImageDropTarget_PreviewDragOver"
+                                     PreviewDrop="SourceImageDropTarget_Drop" />
+                            <Button Grid.Column="2"
+                                    Content="Browse"
+                                    Command="{Binding ChooseSourceImageCommand}"
+                                    MinWidth="74"
+                                    Margin="0" />
+                        </Grid>
 
                         <TextBlock Text="Output directory" Style="{StaticResource FieldLabel}" />
                         <TextBox Text="{Binding OutputDirectory, UpdateSourceTrigger=PropertyChanged}" />
@@ -574,6 +620,28 @@
                                   SelectedItem="{Binding Format}"
                                   Background="#15191F"
                                   Foreground="{StaticResource TextStrong}" />
+
+                        <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,18,0,0" Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="Marker colors" Foreground="{StaticResource TextStrong}" FontWeight="SemiBold" />
+                                <StackPanel Orientation="Horizontal" Margin="0,9,0,0">
+                                    <Ellipse Style="{StaticResource LegendSwatch}" Fill="{StaticResource MarkerGood}" />
+                                    <TextBlock Text="Good: 0-2 px residual" Foreground="{StaticResource TextMuted}" FontSize="12" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <Ellipse Style="{StaticResource LegendSwatch}" Fill="{StaticResource MarkerWarning}" />
+                                    <TextBlock Text="Review: over 2 px" Foreground="{StaticResource TextMuted}" FontSize="12" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <Ellipse Style="{StaticResource LegendSwatch}" Fill="{StaticResource MarkerError}" />
+                                    <TextBlock Text="High error: over 8 px" Foreground="{StaticResource TextMuted}" FontSize="12" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <Ellipse Style="{StaticResource LegendSwatch}" Fill="{StaticResource MarkerDisabled}" Stroke="#8B939E" />
+                                    <TextBlock Text="Disabled control point" Foreground="{StaticResource TextMuted}" FontSize="12" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
 
                         <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,18,0,0" Padding="12">
                             <StackPanel>

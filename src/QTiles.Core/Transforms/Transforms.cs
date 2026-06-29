@@ -81,7 +81,7 @@ public sealed record TransformSolveResult(
 
 public sealed class TransformSolver
 {
-    public TransformSolveResult Solve(QTilesProject project, int imageWidth, int imageHeight)
+    public TransformSolveResult Solve(QTilesProject project, int imageWidth, int imageHeight, int? errorMaxZoom = null)
     {
         var enabled = project.Georeference.ControlPoints.Where(p => p.Enabled).ToList();
         var type = project.Georeference.Transform.Type.Trim().ToLowerInvariant();
@@ -91,7 +91,13 @@ public sealed class TransformSolver
             _ => SolveAffine(enabled)
         };
 
-        return CreateResult(type == "similarity" ? "similarity" : "affine", transform, enabled, project.Render.MaxZoom, imageWidth, imageHeight);
+        return CreateResult(
+            type == "similarity" ? "similarity" : "affine",
+            transform,
+            enabled,
+            errorMaxZoom ?? project.Render.MaxZoom,
+            imageWidth,
+            imageHeight);
     }
 
     public AffineTransform SolveAffine(IReadOnlyList<ControlPointConfig> points)

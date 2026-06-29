@@ -32,21 +32,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string? pendingSide;
     private TransformSolveResult? currentSolveResult;
     private bool isApplyingErrors;
+    private bool isApplyingAutoZoomRange;
+    private bool useAutoZoomRange = true;
     private bool isRendering;
+    private bool hasUnsavedChanges;
+    private bool suppressDirtyTracking;
     private bool useSatelliteMap;
     private bool isPreviewEnabled;
     private string renderSummaryText = "No render yet";
     private CancellationTokenSource? renderCancellation;
+    private readonly RelayCommand cancelRenderCommand;
     private readonly Dictionary<ControlPointViewModel, PropertyChangedEventHandler> pointHandlers = [];
+    private const string ProjectFilter = "QTiles project or image (*.yaml;*.yml;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp)|*.yaml;*.yml;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp|QTiles YAML (*.yaml;*.yml)|*.yaml;*.yml|Image files (*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp)|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp|All files (*.*)|*.*";
+    private const string ImageFilter = "Image files (*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp)|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp|All files (*.*)|*.*";
 
     public MainWindowViewModel()
     {
         OpenCommand = new AsyncCommand(OpenAsync);
         SaveCommand = new AsyncCommand(SaveAsync);
+        ChooseSourceImageCommand = new RelayCommand(ChooseSourceImage);
         ValidateCommand = new RelayCommand(Validate);
         SolveCommand = new RelayCommand(Solve);
         RenderCommand = new AsyncCommand(RenderAsync);
-        CancelRenderCommand = new RelayCommand(CancelRender);
+        cancelRenderCommand = new RelayCommand(CancelRender, () => IsRendering);
+        CancelRenderCommand = cancelRenderCommand;
         OpenOutputCommand = new RelayCommand(OpenOutputFolder);
         AddPointCommand = new RelayCommand(AddPoint);
         DeletePointCommand = new RelayCommand(DeleteSelectedPoint);
@@ -77,8 +86,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool HasUnsavedChanges
+    {
+        get => hasUnsavedChanges;
+        private set
+        {
+            if (hasUnsavedChanges == value)
+            {
+                return;
+            }
+
+            hasUnsavedChanges = value;
+            OnPropertyChanged();
+        }
+    }
+
     public ICommand OpenCommand { get; }
     public ICommand SaveCommand { get; }
+    public ICommand ChooseSourceImageCommand { get; }
     public ICommand ValidateCommand { get; }
     public ICommand SolveCommand { get; }
     public ICommand RenderCommand { get; }
@@ -128,7 +153,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => project.Project.Name;
         set
         {
+            if (project.Project.Name == value)
+            {
+                return;
+            }
+
             project.Project.Name = value;
+            MarkDirty();
             OnPropertyChanged();
         }
     }
@@ -138,7 +169,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => project.Source.Image;
         set
         {
+            if (project.Source.Image == value)
+            {
+                return;
+            }
+
             project.Source.Image = value;
+            MarkDirty();
             OnPropertyChanged();
         }
     }
@@ -148,7 +185,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => project.Render.MinZoom;
         set
         {
+            if (project.Render.MinZoom == value)
+            {
+                return;
+            }
+
             project.Render.MinZoom = value;
+            if (!isApplyingAutoZoomRange)
+            {
+                project.Render.AutoZoom = false;
+                useAutoZoomRange = false;
+            }
+
+            MarkDirty();
             OnPropertyChanged();
         }
     }
@@ -158,7 +207,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => project.Render.MaxZoom;
         set
         {
+            if (project.Render.MaxZoom == value)
+            {
+                return;
+            }
+
             project.Render.MaxZoom = value;
+            if (!isApplyingAutoZoomRange)
+            {
+                project.Render.AutoZoom = false;
+                useAutoZoomRange = false;
+            }
+
+            MarkDirty();
             OnPropertyChanged();
         }
     }
@@ -168,7 +229,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => project.Render.Format;
         set
         {
+            if (project.Render.Format == value)
+            {
+                return;
+            }
+
             project.Render.Format = value;
+            MarkDirty();
             OnPropertyChanged();
         }
     }
@@ -178,7 +245,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => project.Output.Directory;
         set
         {
+            if (project.Output.Directory == value)
+            {
+                return;
+            }
+
             project.Output.Directory = value;
+            MarkDirty();
             OnPropertyChanged();
         }
     }
@@ -250,6 +323,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             isRendering = value;
             OnPropertyChanged();
+            cancelRenderCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -323,7 +397,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    public void HandleWorldPaneClick(double lon, double lat)
+    public void HandleWorldPaneClick(double lon, double lat, double? imageX = null, double? imageY = null)
     {
         if (EditorMode == "Delete point")
         {
@@ -345,6 +419,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         var point = CreatePoint();
         point.Longitude = lon;
         point.Latitude = lat;
+        if (imageX.HasValue && imageY.HasValue)
+        {
+            point.ImageX = imageX.Value;
+            point.ImageY = imageY.Value;
+        }
+
         ControlPoints.Add(point);
         SelectedPoint = point;
 
@@ -391,21 +471,43 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private async Task OpenAsync()
     {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "QTiles YAML (*.yaml;*.yml)|*.yaml;*.yml|All files (*.*)|*.*" };
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            CheckFileExists = true,
+            Filter = ProjectFilter,
+            Title = "Open QTiles project or source image"
+        };
+
         if (dialog.ShowDialog() == true)
         {
-            await LoadAsync(dialog.FileName);
+            if (IsProjectFile(dialog.FileName))
+            {
+                await LoadAsync(dialog.FileName);
+                return;
+            }
+
+            SetSourceImage(dialog.FileName);
         }
     }
 
     private async Task LoadAsync(string path)
     {
-        project = await projectService.OpenAsync(path);
-        projectPath = path;
-        RefreshFromProject();
-        Status = $"Opened {Path.GetFileName(path)}";
-        Validate();
-        Solve();
+        suppressDirtyTracking = true;
+        try
+        {
+            project = await projectService.OpenAsync(path);
+            projectPath = path;
+            RefreshFromProject();
+            Status = $"Opened {Path.GetFileName(path)}";
+            Validate();
+            Solve();
+        }
+        finally
+        {
+            suppressDirtyTracking = false;
+        }
+
+        MarkClean();
     }
 
     private async Task SaveAsync()
@@ -421,9 +523,33 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             projectPath = dialog.FileName;
         }
 
+        project.BaseDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath));
+        RebaseSourceImagePathForProject();
         SyncToProject();
         await projectService.SaveAsync(project, projectPath);
+        MarkClean();
         Status = $"Saved {Path.GetFileName(projectPath)}";
+    }
+
+    private void ChooseSourceImage()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            CheckFileExists = true,
+            Filter = ImageFilter,
+            Title = "Choose source image"
+        };
+
+        var currentPath = ResolveSourceImagePath();
+        if (File.Exists(currentPath))
+        {
+            dialog.InitialDirectory = Path.GetDirectoryName(currentPath);
+        }
+
+        if (dialog.ShowDialog() == true)
+        {
+            SetSourceImage(dialog.FileName);
+        }
     }
 
     private void Validate()
@@ -443,16 +569,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         try
         {
             var image = new NetVipsImageInfoReader().Read(ProjectPaths.Resolve(project, project.Source.Image));
-            var result = new TransformSolver().Solve(project, image.Width, image.Height);
+            var solver = new TransformSolver();
+            var initialResult = solver.Solve(project, image.Width, image.Height);
+            var zoomRange = ZoomRangeCalculator.Resolve(project.Render, initialResult, image.Width, image.Height);
+            if (useAutoZoomRange || ZoomRangeCalculator.UsesAutoZoom(project.Render))
+            {
+                ApplyAutoZoomRange(zoomRange);
+            }
+
+            var result = solver.Solve(project, image.Width, image.Height, zoomRange.MaxZoom);
             CurrentSolveResult = result;
             ApplyErrors(result);
             CanRender = result.TransformType == "affine" && project.Georeference.ControlPoints.Count(p => p.Enabled) >= 3;
             RmsText = $"{result.RmsPixelsAtMaxZoom:0.##} px";
             MaxErrorText = $"{result.MaxPixelsAtMaxZoom:0.##} px";
             SolveState = result.TransformType == "similarity" ? "2-point similarity preview" : "Affine solved";
+            var zoomText = useAutoZoomRange ? $", zoom {zoomRange.MinZoom}..{zoomRange.MaxZoom}" : "";
             Status = result.TransformType == "similarity"
-                ? "2-point similarity preview"
-                : $"Affine solved, RMS {result.RmsPixelsAtMaxZoom:0.##} px, max {result.MaxPixelsAtMaxZoom:0.##} px";
+                ? $"2-point similarity preview{zoomText}"
+                : $"Affine solved{zoomText}, RMS {result.RmsPixelsAtMaxZoom:0.##} px, max {result.MaxPixelsAtMaxZoom:0.##} px";
         }
         catch (Exception ex)
         {
@@ -495,7 +630,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    private void CancelRender() => renderCancellation?.Cancel();
+    private void CancelRender()
+    {
+        if (renderCancellation is null)
+        {
+            return;
+        }
+
+        Status = "Cancelling render...";
+        renderCancellation.Cancel();
+    }
 
     private void OpenOutputFolder()
     {
@@ -529,6 +673,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void RefreshFromProject()
     {
+        useAutoZoomRange = ZoomRangeCalculator.UsesAutoZoom(project.Render);
         ControlPoints.Clear();
         foreach (var point in project.Georeference.ControlPoints)
         {
@@ -543,6 +688,38 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(OutputDirectory));
         OnPropertyChanged(nameof(PreviewOpacity));
         OnPropertyChanged(nameof(TileSize));
+    }
+
+    private void ApplyAutoZoomRange(ZoomRangeRecommendation zoomRange)
+    {
+        useAutoZoomRange = true;
+        project.Render.AutoZoom = true;
+        isApplyingAutoZoomRange = true;
+        try
+        {
+            MinZoom = zoomRange.MinZoom;
+            MaxZoom = zoomRange.MaxZoom;
+        }
+        finally
+        {
+            isApplyingAutoZoomRange = false;
+        }
+    }
+
+    private void ResetAutoZoomRange()
+    {
+        useAutoZoomRange = true;
+        project.Render.AutoZoom = true;
+        isApplyingAutoZoomRange = true;
+        try
+        {
+            MinZoom = 0;
+            MaxZoom = 0;
+        }
+        finally
+        {
+            isApplyingAutoZoomRange = false;
+        }
     }
 
     private void SyncToProject()
@@ -579,6 +756,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void ControlPointsOnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        MarkDirty();
+
         if (e.OldItems is not null)
         {
             foreach (ControlPointViewModel point in e.OldItems)
@@ -613,6 +792,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 return;
             }
 
+            MarkDirty();
             ValidateAndSolve();
         };
 
@@ -626,5 +806,126 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         Validate();
         Solve();
+    }
+
+    private void MarkDirty()
+    {
+        if (!suppressDirtyTracking)
+        {
+            HasUnsavedChanges = true;
+        }
+    }
+
+    private void MarkClean() => HasUnsavedChanges = false;
+
+    public void SetSourceImage(string imagePath)
+    {
+        if (!IsSupportedSourceImageFile(imagePath))
+        {
+            Status = $"Unsupported source image: {Path.GetFileName(imagePath)}";
+            return;
+        }
+
+        SourceImage = CreateProjectPathForSourceImage(imagePath);
+        ResetAutoZoomRange();
+        if (string.IsNullOrWhiteSpace(ProjectName) || ProjectName == "QTiles project")
+        {
+            ProjectName = Path.GetFileNameWithoutExtension(imagePath);
+        }
+
+        CurrentSolveResult = null;
+        RmsText = "n/a";
+        MaxErrorText = "n/a";
+        Validate();
+        if (CanAttemptSolve())
+        {
+            Solve();
+        }
+        else
+        {
+            CanRender = false;
+            SolveState = "Add control points";
+        }
+
+        Status = $"Source image set: {Path.GetFileName(imagePath)}";
+    }
+
+    private bool CanAttemptSolve()
+    {
+        var enabledPoints = ControlPoints.Count(p => p.Enabled);
+        var transformType = project.Georeference.Transform.Type.Trim().ToLowerInvariant();
+        return transformType == "similarity" ? enabledPoints >= 2 : enabledPoints >= 3;
+    }
+
+    private string CreateProjectPathForSourceImage(string imagePath)
+    {
+        var directory = ProjectDirectory;
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return imagePath;
+        }
+
+        try
+        {
+            var relative = Path.GetRelativePath(directory, imagePath);
+            return NormalizeProjectPath(relative);
+        }
+        catch
+        {
+            return imagePath;
+        }
+    }
+
+    private void RebaseSourceImagePathForProject()
+    {
+        if (projectPath is null || string.IsNullOrWhiteSpace(project.Source.Image))
+        {
+            return;
+        }
+
+        var sourcePath = ResolveSourceImagePath();
+        if (!Path.IsPathRooted(sourcePath))
+        {
+            return;
+        }
+
+        SourceImage = CreateProjectPathForSourceImage(sourcePath);
+    }
+
+    private string? ProjectDirectory => projectPath is { Length: > 0 }
+        ? Path.GetDirectoryName(Path.GetFullPath(projectPath))
+        : project.BaseDirectory;
+
+    private static bool IsProjectFile(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".yml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsSupportedSourceImageFile(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".png", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".tif", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".tiff", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeProjectPath(string path)
+    {
+        var isRooted = Path.IsPathRooted(path);
+        var normalized = path.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+        if (!isRooted
+            && !normalized.StartsWith("./", StringComparison.Ordinal)
+            && !normalized.StartsWith("../", StringComparison.Ordinal))
+        {
+            normalized = $"./{normalized}";
+        }
+
+        return normalized;
     }
 }

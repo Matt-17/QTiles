@@ -61,9 +61,13 @@ public sealed class TileRenderer : ITileRenderer
         var sourceImagePath = ProjectPaths.Resolve(project, project.Source.Image);
         var outputDirectory = ProjectPaths.Resolve(project, project.Output.Directory);
         var imageInfo = imageInfoReader.Read(sourceImagePath);
-        var solveResult = solver.Solve(project, imageInfo.Width, imageInfo.Height);
+        var initialSolveResult = solver.Solve(project, imageInfo.Width, imageInfo.Height);
+        var zoomRange = ZoomRangeCalculator.Resolve(project.Render, initialSolveResult, imageInfo.Width, imageInfo.Height);
+        var solveResult = zoomRange.MaxZoom == project.Render.MaxZoom
+            ? initialSolveResult
+            : solver.Solve(project, imageInfo.Width, imageInfo.Height, zoomRange.MaxZoom);
         var renderTransform = TransformSolver.ToAffineTransform(solveResult.Transform);
-        var ranges = Enumerable.Range(project.Render.MinZoom, project.Render.MaxZoom - project.Render.MinZoom + 1)
+        var ranges = Enumerable.Range(zoomRange.MinZoom, zoomRange.MaxZoom - zoomRange.MinZoom + 1)
             .Select(z => TileMath.BoundsToTileRange(solveResult.Bounds, z))
             .ToList();
         var total = ranges.Sum(r => r.Count);
@@ -100,7 +104,7 @@ public sealed class TileRenderer : ITileRenderer
         }
 
         stopwatch.Stop();
-        var summary = new RenderSummary(written, skipped, project.Render.MinZoom, project.Render.MaxZoom, solveResult.Bounds, stopwatch.Elapsed);
+        var summary = new RenderSummary(written, skipped, zoomRange.MinZoom, zoomRange.MaxZoom, solveResult.Bounds, stopwatch.Elapsed);
         if (project.Output.TileJson)
         {
             await TileJsonWriter.WriteAsync(project, solveResult, summary, ProjectPaths.Resolve(project, project.Output.TileJsonPath), cancellationToken);

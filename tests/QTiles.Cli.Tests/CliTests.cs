@@ -57,6 +57,7 @@ public sealed class CliTests
         var yaml = Path.Combine(temp.Path, "qtiles.yaml");
         var project = SolvableProject(image);
         project.Render.TileSize = 2;
+        project.Render.AutoZoom = false;
         project.Render.MinZoom = 0;
         project.Render.MaxZoom = 0;
         project.Render.Resampling = "nearest";

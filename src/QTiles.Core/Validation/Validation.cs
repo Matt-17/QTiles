@@ -1,4 +1,5 @@
 using QTiles.Core.Config;
+using QTiles.Core.Rendering;
 
 namespace QTiles.Core.Validation;
 
@@ -34,7 +35,7 @@ public sealed class ProjectValidator
             messages.Add(Error("tile-size", "render.tileSize must be positive."));
         }
 
-        if (project.Render.MinZoom > project.Render.MaxZoom)
+        if (!ZoomRangeCalculator.UsesAutoZoom(project.Render) && project.Render.MinZoom > project.Render.MaxZoom)
         {
             messages.Add(Error("zoom-range", "render.minZoom must be less than or equal to render.maxZoom."));
         }

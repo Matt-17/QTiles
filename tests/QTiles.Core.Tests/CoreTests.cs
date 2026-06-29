@@ -242,12 +242,30 @@ public sealed class RendererTests
         Assert.Equal(0, rendered.Getpoint(0, 0)[3]);
     }
 
+    [Fact]
+    public async Task Renderer_AutoZoom_UsesSolvedImageScale()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "sample.png");
+        await File.WriteAllTextAsync(source, "placeholder");
+        var writer = new RecordingTileWriter();
+        var renderer = new TileRenderer(new FixedImageInfoReader(1000, 1000), writer, new(), new());
+        var project = AutoZoomProject(source, temp.Path);
+
+        var summary = await renderer.RenderAsync(project, null, CancellationToken.None);
+
+        Assert.True(summary.MinZoom > 0);
+        Assert.True(summary.MaxZoom >= summary.MinZoom);
+        Assert.Equal(summary.TilesWritten, writer.Paths.Count);
+        Assert.All(writer.Requests, request => Assert.InRange(request.Tile.Z, summary.MinZoom, summary.MaxZoom));
+    }
+
     private static QTilesProject Project(string source, string output) => new()
     {
         Project = new ProjectInfo { Name = "Renderer test" },
         Source = new SourceConfig { Image = source },
         Output = new OutputConfig { Directory = output, TileJson = true, TileJsonPath = Path.Combine(output, "tilejson.json") },
-        Render = new RenderConfig { MinZoom = 0, MaxZoom = 0, Format = "png" },
+        Render = new RenderConfig { AutoZoom = false, MinZoom = 0, MaxZoom = 0, Format = "png" },
         Georeference = new GeoreferenceConfig
         {
             ControlPoints =
@@ -264,7 +282,7 @@ public sealed class RendererTests
         Project = new ProjectInfo { Name = "Full world test" },
         Source = new SourceConfig { Image = source },
         Output = new OutputConfig { Directory = output, TileJson = true, TileJsonPath = Path.Combine(output, "tilejson.json") },
-        Render = new RenderConfig { TileSize = tileSize, MinZoom = tileSize == 1 ? 0 : 1, MaxZoom = tileSize == 1 ? 0 : 1, Format = "png", Resampling = "nearest", SkipEmptyTiles = false },
+        Render = new RenderConfig { AutoZoom = false, TileSize = tileSize, MinZoom = tileSize == 1 ? 0 : 1, MaxZoom = tileSize == 1 ? 0 : 1, Format = "png", Resampling = "nearest", SkipEmptyTiles = false },
         Georeference = new GeoreferenceConfig
         {
             ControlPoints =
@@ -272,6 +290,23 @@ public sealed class RendererTests
                 NormalizedPoint("1", 0, 0, 0, 0),
                 NormalizedPoint("2", tileSize == 1 ? 1 : 4, 0, 1, 0),
                 NormalizedPoint("3", 0, tileSize == 1 ? 1 : 4, 0, 1)
+            ]
+        }
+    };
+
+    private static QTilesProject AutoZoomProject(string source, string output) => new()
+    {
+        Project = new ProjectInfo { Name = "Auto zoom test" },
+        Source = new SourceConfig { Image = source },
+        Output = new OutputConfig { Directory = output, TileJson = true, TileJsonPath = Path.Combine(output, "tilejson.json") },
+        Render = new RenderConfig { AutoZoom = true, MinZoom = 0, MaxZoom = 0, Format = "png" },
+        Georeference = new GeoreferenceConfig
+        {
+            ControlPoints =
+            [
+                NormalizedPoint("1", 0, 0, 0.50, 0.50),
+                NormalizedPoint("2", 1000, 0, 0.5001, 0.50),
+                NormalizedPoint("3", 0, 1000, 0.50, 0.5001)
             ]
         }
     };
@@ -336,9 +371,11 @@ public sealed class RendererTests
     private sealed class RecordingTileWriter : IRenderedTileWriter
     {
         public List<string> Paths { get; } = [];
+        public List<RenderedTileRequest> Requests { get; } = [];
         public Task<bool> WriteAsync(string path, RenderedTileRequest request, CancellationToken cancellationToken)
         {
             Paths.Add(path);
+            Requests.Add(request);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, "tile");
             return Task.FromResult(true);
