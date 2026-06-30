@@ -7,44 +7,46 @@ using NetVips;
 
 namespace QTiles.Tests;
 
+[TestClass]
 public sealed class GeoTests
 {
-    [Fact]
+    [TestMethod]
     public void WebMercator_LonLatToNormalized_KnownValues()
     {
         var point = WebMercator.LonLatToNormalized(0, 0);
-        Assert.Equal(0.5, point.X, 9);
-        Assert.Equal(0.5, point.Y, 9);
+        Assert.AreEqual(0.5, point.X, 1e-9);
+        Assert.AreEqual(0.5, point.Y, 1e-9);
     }
 
-    [Fact]
+    [TestMethod]
     public void WebMercator_ClampsLatitude()
     {
         var high = WebMercator.LonLatToNormalized(0, 120);
         var max = WebMercator.LonLatToNormalized(0, WebMercator.MaxLatitude);
-        Assert.Equal(max.Y, high.Y, 9);
+        Assert.AreEqual(max.Y, high.Y, 1e-9);
     }
 
-    [Fact]
+    [TestMethod]
     public void TileMath_BoundsToTileRange_Zoom0()
     {
         var range = TileMath.BoundsToTileRange(new GeoBounds(-180, -85, 180, 85), 0);
-        Assert.Equal(new TileRange(0, 0, 0, 0, 0), range);
+        Assert.AreEqual(new TileRange(0, 0, 0, 0, 0), range);
     }
 
-    [Fact]
+    [TestMethod]
     public void TileMath_BoundsToTileRange_KnownCityBounds()
     {
         var range = TileMath.BoundsToTileRange(new GeoBounds(13.70, 51.02, 13.80, 51.08), 10);
-        Assert.True(range.MinX <= range.MaxX);
-        Assert.True(range.MinY <= range.MaxY);
-        Assert.InRange(range.MinX, 0, 1023);
+        Assert.IsTrue(range.MinX <= range.MaxX);
+        Assert.IsTrue(range.MinY <= range.MaxY);
+        TestAssert.InRange(range.MinX, 0, 1023);
     }
 }
 
+[TestClass]
 public sealed class TransformTests
 {
-    [Fact]
+    [TestMethod]
     public void AffineSolver_ThreePoints_Exact()
     {
         var transform = new TransformSolver().SolveAffine(new[]
@@ -55,22 +57,22 @@ public sealed class TransformTests
         });
 
         var actual = transform.ImageToWorld(new ImagePoint { X = 50, Y = 50 });
-        Assert.Equal(0.15, actual.X, 8);
-        Assert.Equal(0.25, actual.Y, 8);
+        Assert.AreEqual(0.15, actual.X, 1e-8);
+        Assert.AreEqual(0.25, actual.Y, 1e-8);
     }
 
-    [Fact]
+    [TestMethod]
     public void AffineTransform_Inverse_RoundTrips()
     {
         var transform = new AffineTransform(0.01, 0.001, 0.2, -0.002, 0.02, 0.3);
         var original = new ImagePoint { X = 22, Y = 45 };
         var world = transform.ImageToWorld(original);
         var roundTrip = transform.WorldToImage(world);
-        Assert.Equal(original.X, roundTrip.X, 8);
-        Assert.Equal(original.Y, roundTrip.Y, 8);
+        Assert.AreEqual(original.X, roundTrip.X, 1e-8);
+        Assert.AreEqual(original.Y, roundTrip.Y, 1e-8);
     }
 
-    [Fact]
+    [TestMethod]
     public void SimilaritySolver_TwoPoints_Exact()
     {
         var transform = new TransformSolver().SolveSimilarity(new[]
@@ -80,11 +82,11 @@ public sealed class TransformTests
         });
 
         var actual = transform.ImageToWorld(new ImagePoint { X = 100, Y = 0 });
-        Assert.Equal(0.20, actual.X, 8);
-        Assert.Equal(0.20, actual.Y, 8);
+        Assert.AreEqual(0.20, actual.X, 1e-8);
+        Assert.AreEqual(0.20, actual.Y, 1e-8);
     }
 
-    [Fact]
+    [TestMethod]
     public void Solver_DisabledPoints_AreIgnored()
     {
         var project = ProjectWithPoints(
@@ -94,10 +96,10 @@ public sealed class TransformTests
             Point("bad", 5000, 5000, 0.90, 0.90, enabled: false));
 
         var result = new TransformSolver().Solve(project, 100, 100);
-        Assert.DoesNotContain(result.Errors, e => e.Id.Value == "bad");
+        Assert.IsFalse(result.Errors.Any(e => e.Id.Value == "bad"));
     }
 
-    [Fact]
+    [TestMethod]
     public void Solver_ReportsPerPointErrors()
     {
         var result = new TransformSolver().Solve(ProjectWithPoints(
@@ -105,8 +107,8 @@ public sealed class TransformTests
             Point("2", 100, 0, 0.20, 0.20),
             Point("3", 0, 100, 0.10, 0.30)), 100, 100);
 
-        Assert.Equal(3, result.Errors.Count);
-        Assert.True(result.RmsPixelsAtMaxZoom < 1e-6);
+        Assert.AreEqual(3, result.Errors.Count);
+        Assert.IsTrue(result.RmsPixelsAtMaxZoom < 1e-6);
     }
 
     private static QTilesProject ProjectWithPoints(params ControlPointConfig[] points) => new()
@@ -129,37 +131,38 @@ public sealed class TransformTests
     }
 }
 
+[TestClass]
 public sealed class YamlTests
 {
-    [Fact]
+    [TestMethod]
     public void Yaml_RoundTrip_MinimalProject()
     {
         var serializer = new QTilesYamlSerializer();
         var yaml = serializer.Serialize(new QTilesProject { Project = new ProjectInfo { Name = "Old map" } });
         var roundTrip = serializer.Deserialize(yaml);
-        Assert.Equal("Old map", roundTrip.Project.Name);
+        Assert.AreEqual("Old map", roundTrip.Project.Name);
     }
 
-    [Fact]
+    [TestMethod]
     public void Yaml_RoundTrip_ControlPointIds_IntLike()
     {
         var project = new QTilesProject();
         project.Georeference.ControlPoints.Add(new ControlPointConfig { Id = new ControlPointId("1") });
         var roundTrip = new QTilesYamlSerializer().Deserialize(new QTilesYamlSerializer().Serialize(project));
-        Assert.Equal("1", roundTrip.Georeference.ControlPoints[0].Id.Value);
+        Assert.AreEqual("1", roundTrip.Georeference.ControlPoints[0].Id.Value);
     }
 
-    [Fact]
+    [TestMethod]
     public void Yaml_RoundTrip_ControlPointIds_GuidLike()
     {
         var id = Guid.NewGuid().ToString();
         var project = new QTilesProject();
         project.Georeference.ControlPoints.Add(new ControlPointConfig { Id = new ControlPointId(id) });
         var roundTrip = new QTilesYamlSerializer().Deserialize(new QTilesYamlSerializer().Serialize(project));
-        Assert.Equal(id, roundTrip.Georeference.ControlPoints[0].Id.Value);
+        Assert.AreEqual(id, roundTrip.Georeference.ControlPoints[0].Id.Value);
     }
 
-    [Fact]
+    [TestMethod]
     public void Yaml_RoundTrip_ControlPointLocked_OnlyWhenTrue()
     {
         var serializer = new QTilesYamlSerializer();
@@ -170,16 +173,17 @@ public sealed class YamlTests
         var yaml = serializer.Serialize(project);
         var roundTrip = serializer.Deserialize(yaml);
 
-        Assert.Contains("locked: true", yaml);
-        Assert.DoesNotContain("locked: false", yaml);
-        Assert.True(roundTrip.Georeference.ControlPoints[0].Locked is true);
-        Assert.Null(roundTrip.Georeference.ControlPoints[1].Locked);
+        StringAssert.Contains(yaml, "locked: true");
+        Assert.IsFalse(yaml.Contains("locked: false", StringComparison.Ordinal));
+        Assert.IsTrue(roundTrip.Georeference.ControlPoints[0].Locked is true);
+        Assert.IsNull(roundTrip.Georeference.ControlPoints[1].Locked);
     }
 }
 
+[TestClass]
 public sealed class RendererTests
 {
-    [Fact]
+    [TestMethod]
     public async Task Renderer_WritesExpectedTilePaths()
     {
         using var temp = new TempFolder();
@@ -191,10 +195,10 @@ public sealed class RendererTests
 
         await renderer.RenderAsync(project, null, CancellationToken.None);
 
-        Assert.Contains(writer.Paths, p => p.EndsWith(Path.Combine("0", "0", "0.png")));
+        Assert.IsTrue(writer.Paths.Any(p => p.EndsWith(Path.Combine("0", "0", "0.png"))));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Renderer_TileJson_WritesBoundsAndZooms()
     {
         using var temp = new TempFolder();
@@ -206,11 +210,11 @@ public sealed class RendererTests
         await renderer.RenderAsync(project, null, CancellationToken.None);
 
         var json = await File.ReadAllTextAsync(project.Output.TileJsonPath);
-        Assert.Contains("\"tilejson\": \"3.0.0\"", json);
-        Assert.Contains("\"minzoom\": 0", json);
+        StringAssert.Contains(json, "\"tilejson\": \"3.0.0\"");
+        StringAssert.Contains(json, "\"minzoom\": 0");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Renderer_AffineIdentityLikeMapping_ProducesExpectedPixels()
     {
         using var temp = new TempFolder();
@@ -222,13 +226,13 @@ public sealed class RendererTests
 
         using var rendered = Image.NewFromFile(Path.Combine(temp.Path, "1", "1", "0.png"));
         var pixel = rendered.Getpoint(0, 0);
-        Assert.InRange(pixel[0], 85, 95);
-        Assert.InRange(pixel[1], 5, 15);
-        Assert.InRange(pixel[2], 195, 205);
-        Assert.InRange(pixel[3], 250, 255);
+        TestAssert.InRange(pixel[0], 85, 95);
+        TestAssert.InRange(pixel[1], 5, 15);
+        TestAssert.InRange(pixel[2], 195, 205);
+        TestAssert.InRange(pixel[3], 250, 255);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Renderer_SkipEmptyTiles_Works()
     {
         using var temp = new TempFolder();
@@ -239,12 +243,12 @@ public sealed class RendererTests
 
         var summary = await new TileRenderer().RenderAsync(project, null, CancellationToken.None);
 
-        Assert.Equal(0, summary.TilesWritten);
-        Assert.Equal(1, summary.TilesSkipped);
-        Assert.False(File.Exists(Path.Combine(temp.Path, "0", "0", "0.png")));
+        Assert.AreEqual(0, summary.TilesWritten);
+        Assert.AreEqual(1, summary.TilesSkipped);
+        Assert.IsFalse(File.Exists(Path.Combine(temp.Path, "0", "0", "0.png")));
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Renderer_PngPreservesTransparency()
     {
         using var temp = new TempFolder();
@@ -256,10 +260,10 @@ public sealed class RendererTests
         await new TileRenderer().RenderAsync(project, null, CancellationToken.None);
 
         using var rendered = Image.NewFromFile(Path.Combine(temp.Path, "0", "0", "0.png"));
-        Assert.Equal(0, rendered.Getpoint(0, 0)[3]);
+        Assert.AreEqual(0.0, rendered.Getpoint(0, 0)[3], 0.0001);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Renderer_AutoZoom_UsesSolvedImageScale()
     {
         using var temp = new TempFolder();
@@ -271,10 +275,14 @@ public sealed class RendererTests
 
         var summary = await renderer.RenderAsync(project, null, CancellationToken.None);
 
-        Assert.True(summary.MinZoom > 0);
-        Assert.True(summary.MaxZoom >= summary.MinZoom);
-        Assert.Equal(summary.TilesWritten, writer.Paths.Count);
-        Assert.All(writer.Requests, request => Assert.InRange(request.Tile.Z, summary.MinZoom, summary.MaxZoom));
+        Assert.IsTrue(summary.MinZoom > 0);
+        Assert.IsTrue(summary.MaxZoom >= summary.MinZoom);
+        Assert.AreEqual(summary.TilesWritten, writer.Paths.Count);
+
+        foreach (var request in writer.Requests)
+        {
+            TestAssert.InRange(request.Tile.Z, summary.MinZoom, summary.MaxZoom);
+        }
     }
 
     private static QTilesProject Project(string source, string output) => new()
@@ -404,5 +412,15 @@ public sealed class RendererTests
         public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"qtiles-{Guid.NewGuid():N}");
         public TempFolder() => Directory.CreateDirectory(Path);
         public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+}
+
+internal static class TestAssert
+{
+    public static void InRange(double actual, double minimum, double maximum)
+    {
+        Assert.IsTrue(
+            actual >= minimum && actual <= maximum,
+            $"Expected {actual} to be in range [{minimum}, {maximum}].");
     }
 }

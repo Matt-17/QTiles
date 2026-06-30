@@ -5,9 +5,10 @@ using NetVips;
 
 namespace QTiles.Tests;
 
+[TestClass]
 public sealed class CliTests
 {
-    [Fact]
+    [TestMethod]
     public async Task Cli_Init_CreatesYaml()
     {
         using var temp = new TempFolder();
@@ -17,12 +18,12 @@ public sealed class CliTests
 
         var exitCode = await CliApplication.RunAsync(["init", "--image", image, "--out", yaml, "--name", "CLI test"], CancellationToken.None);
 
-        Assert.Equal(0, exitCode);
-        Assert.True(File.Exists(yaml));
-        Assert.Contains("CLI test", await File.ReadAllTextAsync(yaml));
+        Assert.AreEqual(0, exitCode);
+        Assert.IsTrue(File.Exists(yaml));
+        StringAssert.Contains(await File.ReadAllTextAsync(yaml), "CLI test");
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Cli_Validate_ReturnsNonZeroForInvalidProject()
     {
         using var temp = new TempFolder();
@@ -31,10 +32,10 @@ public sealed class CliTests
 
         var exitCode = await CliApplication.RunAsync(["validate", yaml, "--json"], CancellationToken.None);
 
-        Assert.Equal(1, exitCode);
+        Assert.AreEqual(1, exitCode);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Cli_Solve_PrintsRms()
     {
         using var temp = new TempFolder();
@@ -45,10 +46,10 @@ public sealed class CliTests
 
         var exitCode = await CliApplication.RunAsync(["solve", yaml], CancellationToken.None);
 
-        Assert.Equal(0, exitCode);
+        Assert.AreEqual(0, exitCode);
     }
 
-    [Fact]
+    [TestMethod]
     public async Task Cli_Render_WritesTiles()
     {
         using var temp = new TempFolder();
@@ -67,9 +68,9 @@ public sealed class CliTests
 
         var exitCode = await CliApplication.RunAsync(["render", yaml], CancellationToken.None);
 
-        Assert.Equal(0, exitCode);
-        Assert.True(File.Exists(Path.Combine(project.Output.Directory, "0", "0", "0.png")));
-        Assert.True(File.Exists(project.Output.TileJsonPath));
+        Assert.AreEqual(0, exitCode);
+        Assert.IsTrue(File.Exists(Path.Combine(project.Output.Directory, "0", "0", "0.png")));
+        Assert.IsTrue(File.Exists(project.Output.TileJsonPath));
     }
 
     private static QTilesProject SolvableProject(string image) => new()
