@@ -18,7 +18,20 @@ public sealed class RenderJobService
         QTilesProject project,
         IProgress<TileRenderProgress>? progress,
         CancellationToken cancellationToken)
-        => new TileRenderer().RenderAsync(project, progress, cancellationToken);
+    {
+        var renderProject = Snapshot(project);
+        return Task.Run(
+            () => new TileRenderer().RenderAsync(renderProject, progress, cancellationToken),
+            cancellationToken);
+    }
+
+    private static QTilesProject Snapshot(QTilesProject project)
+    {
+        var serializer = new QTilesYamlSerializer();
+        var snapshot = serializer.Deserialize(serializer.Serialize(project));
+        snapshot.BaseDirectory = project.BaseDirectory;
+        return snapshot;
+    }
 }
 
 public sealed class MapsuiWorldMapService

@@ -45,6 +45,11 @@ public sealed class ProjectValidator
             messages.Add(Error("format", "render.format must be png, jpg, or webp."));
         }
 
+        if (!RenderResampling.IsSupported(project.Render.Resampling))
+        {
+            messages.Add(Error("resampling", $"render.resampling must be one of: {string.Join(", ", RenderResampling.Values)}."));
+        }
+
         var enabled = project.Georeference.ControlPoints.Where(p => p.Enabled).ToList();
         var transform = project.Georeference.Transform.Type.Trim().ToLowerInvariant();
         if (transform == "affine" && enabled.Count < 3)

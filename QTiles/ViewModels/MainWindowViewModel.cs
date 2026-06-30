@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Windows;
 using System.Windows.Input;
 using QTiles.Core.Config;
 using QTiles.Core.Imaging;
@@ -47,7 +48,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private EditorSettings editorSettings = new();
     private Action? editorSettingsChanged;
     private readonly RelayCommand cancelRenderCommand;
+    private readonly RelayCommand deletePointCommand;
     private readonly Dictionary<ControlPointViewModel, PropertyChangedEventHandler> pointHandlers = [];
+    private const int MaxRecentItems = 8;
     private const double ReviewErrorPixels = 2.0;
     private const double HighErrorPixels = 8.0;
     private const string SolveGoodBrush = "#3BAA8D";
@@ -62,6 +65,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OpenCommand = new AsyncCommand(OpenAsync);
         SaveCommand = new AsyncCommand(SaveAsync);
         ChooseSourceImageCommand = new RelayCommand(ChooseSourceImage);
+        OpenRecentProjectCommand = new RelayCommand<string>(path => _ = OpenRecentProjectAsync(path ?? string.Empty), HasPath);
+        OpenRecentImageCommand = new RelayCommand<string>(path => OpenRecentImage(path ?? string.Empty), HasPath);
+        OpenRecentOutputDirectoryCommand = new RelayCommand<string>(path => OpenRecentOutputDirectory(path ?? string.Empty), HasPath);
         ChooseOutputDirectoryCommand = new RelayCommand(ChooseOutputDirectory);
         ValidateCommand = new RelayCommand(Validate);
         SolveCommand = new RelayCommand(Solve);
@@ -70,7 +76,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         CancelRenderCommand = cancelRenderCommand;
         OpenOutputCommand = new RelayCommand(OpenOutputFolder);
         AddPointCommand = new RelayCommand(AddPoint);
-        DeletePointCommand = new RelayCommand(DeleteSelectedPoint);
+        deletePointCommand = new RelayCommand(DeleteSelectedPoint, () => HasSelectedPoint);
+        DeletePointCommand = deletePointCommand;
         ControlPoints.CollectionChanged += ControlPointsOnCollectionChanged;
     }
 
@@ -78,12 +85,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         editorSettings = settings;
         editorSettings.LastOpenDirectory ??= string.Empty;
+        editorSettings.RecentProjects ??= [];
+        editorSettings.RecentImages ??= [];
+        editorSettings.RecentOutputDirectories ??= [];
         editorSettingsChanged = settingsChanged;
+        RefreshRecentFiles();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ObservableCollection<ControlPointViewModel> ControlPoints { get; } = [];
+    public ObservableCollection<RecentFileViewModel> RecentProjects { get; } = [];
+    public ObservableCollection<RecentFileViewModel> RecentImages { get; } = [];
+    public ObservableCollection<RecentFileViewModel> RecentOutputDirectories { get; } = [];
     public IReadOnlyList<string> RenderFormats { get; } = ["png", "jpg", "webp"];
     public IReadOnlyList<string> EditorModes { get; } =
     [
@@ -100,8 +114,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => selectedPoint;
         set
         {
+            if (ReferenceEquals(selectedPoint, value))
+            {
+                return;
+            }
+
             selectedPoint = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(HasSelectedPoint));
+            deletePointCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -120,9 +141,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool HasSelectedPoint => SelectedPoint is not null;
+
+    public bool HasRecentProjects => RecentProjects.Count > 0;
+
+    public bool HasRecentImages => RecentImages.Count > 0;
+
+    public bool HasRecentOutputDirectories => RecentOutputDirectories.Count > 0;
+
     public ICommand OpenCommand { get; }
     public ICommand SaveCommand { get; }
     public ICommand ChooseSourceImageCommand { get; }
+    public ICommand OpenRecentProjectCommand { get; }
+    public ICommand OpenRecentImageCommand { get; }
+    public ICommand OpenRecentOutputDirectoryCommand { get; }
     public ICommand ChooseOutputDirectoryCommand { get; }
     public ICommand ValidateCommand { get; }
     public ICommand SolveCommand { get; }
@@ -155,6 +187,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public double PreviewOpacity => project.Editor.Preview.Opacity;
 
     public int TileSize => project.Render.TileSize;
+
+    public string RenderOptionsSummary =>
+        $"{RenderResampling.DisplayName(project.Render.Resampling)}, {project.Render.TileSize}px, q{project.Render.Quality}";
 
     public string EditorMode
     {
@@ -267,6 +302,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             project.Render.Format = value;
             MarkDirty();
             OnPropertyChanged();
+            OnPropertyChanged(nameof(RenderOptionsSummary));
         }
     }
 
@@ -412,6 +448,87 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public string ResolveOutputDirectory() => ProjectPaths.Resolve(project, project.Output.Directory);
 
+    public RenderOptionsSnapshot CreateRenderOptionsSnapshot() => new(
+        project.Render.TileSize,
+        project.Render.Format,
+        project.Render.Quality,
+        RenderResampling.Normalize(project.Render.Resampling),
+        project.Render.Background,
+        project.Render.SkipEmptyTiles,
+        project.Render.Overwrite,
+        project.Output.TileJson);
+
+    public void ApplyRenderOptions(RenderOptionsSnapshot options)
+    {
+        var normalizedResampling = RenderResampling.Normalize(options.Resampling);
+        var changed = false;
+
+        if (project.Render.TileSize != options.TileSize)
+        {
+            project.Render.TileSize = options.TileSize;
+            changed = true;
+            OnPropertyChanged(nameof(TileSize));
+        }
+
+        if (!string.Equals(project.Render.Format, options.Format, StringComparison.OrdinalIgnoreCase))
+        {
+            project.Render.Format = options.Format;
+            changed = true;
+            OnPropertyChanged(nameof(Format));
+        }
+
+        if (project.Render.Quality != options.Quality)
+        {
+            project.Render.Quality = options.Quality;
+            changed = true;
+        }
+
+        if (!string.Equals(project.Render.Resampling, normalizedResampling, StringComparison.OrdinalIgnoreCase))
+        {
+            project.Render.Resampling = normalizedResampling;
+            changed = true;
+        }
+
+        if (!string.Equals(project.Render.Background, options.Background, StringComparison.OrdinalIgnoreCase))
+        {
+            project.Render.Background = options.Background;
+            changed = true;
+        }
+
+        if (project.Render.SkipEmptyTiles != options.SkipEmptyTiles)
+        {
+            project.Render.SkipEmptyTiles = options.SkipEmptyTiles;
+            changed = true;
+        }
+
+        if (project.Render.Overwrite != options.Overwrite)
+        {
+            project.Render.Overwrite = options.Overwrite;
+            changed = true;
+        }
+
+        if (project.Output.TileJson != options.WriteTileJson)
+        {
+            project.Output.TileJson = options.WriteTileJson;
+            changed = true;
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        MarkDirty();
+        OnPropertyChanged(nameof(RenderOptionsSummary));
+        Validate();
+        if (CanAttemptSolve())
+        {
+            Solve();
+        }
+
+        Status = $"Render options: {RenderResampling.DisplayName(normalizedResampling)}, q{options.Quality}";
+    }
+
     public void HandleImagePaneClick(double imageX, double imageY)
     {
         if (EditorMode == "Delete point")
@@ -544,7 +661,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             RememberOpenDirectory(dialog.FileName);
             if (IsProjectFile(dialog.FileName))
             {
-                await LoadAsync(dialog.FileName);
+                await OpenProjectAsync(dialog.FileName);
                 return;
             }
 
@@ -560,6 +677,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             project = await projectService.OpenAsync(path);
             RememberOpenDirectory(path);
             projectPath = path;
+            AddRecentProject(path);
             RefreshFromProject();
             Status = $"Opened {Path.GetFileName(path)}";
             Validate();
@@ -575,23 +693,127 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private async Task SaveAsync()
     {
+        await SaveProjectAsync();
+    }
+
+    private async Task<bool> SaveProjectAsync()
+    {
         if (projectPath is null)
         {
-            var dialog = new Microsoft.Win32.SaveFileDialog { Filter = "QTiles YAML (*.yaml)|*.yaml" };
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "QTiles YAML (*.yaml)|*.yaml",
+                FileName = "qtiles.yaml"
+            };
+            ApplyInitialOpenDirectory(dialog);
             if (dialog.ShowDialog() != true)
             {
-                return;
+                return false;
             }
 
             projectPath = dialog.FileName;
         }
 
-        project.BaseDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath));
-        RebaseSourceImagePathForProject();
-        SyncToProject();
-        await projectService.SaveAsync(project, projectPath);
-        MarkClean();
-        Status = $"Saved {Path.GetFileName(projectPath)}";
+        try
+        {
+            project.BaseDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath));
+            RebaseSourceImagePathForProject();
+            SyncToProject();
+            await projectService.SaveAsync(project, projectPath);
+            RememberOpenDirectory(projectPath);
+            AddRecentProject(projectPath);
+            MarkClean();
+            Status = $"Saved {Path.GetFileName(projectPath)}";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Status = $"Save failed: {ex.Message}";
+            ShowError("Save failed", ex.Message);
+            return false;
+        }
+    }
+
+    private async Task OpenProjectAsync(string path)
+    {
+        if (!await ConfirmReplaceProjectAsync(path))
+        {
+            Status = "Open cancelled";
+            return;
+        }
+
+        try
+        {
+            await LoadAsync(path);
+        }
+        catch (Exception ex)
+        {
+            Status = $"Open failed: {ex.Message}";
+            ShowError("Open failed", ex.Message);
+        }
+    }
+
+    private async Task<bool> ConfirmReplaceProjectAsync(string nextPath)
+    {
+        if (!HasUnsavedChanges)
+        {
+            return true;
+        }
+
+        var currentName = projectPath is { Length: > 0 }
+            ? Path.GetFileName(projectPath)
+            : "the current project";
+        var nextName = Path.GetFileName(nextPath);
+        var result = MessageBox.Show(
+            Application.Current.MainWindow,
+            $"Save changes to {currentName} before opening {nextName}?\n\nYes saves changes. No discards them. Cancel keeps the current project open.",
+            "Unsaved changes",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel);
+
+        return result switch
+        {
+            MessageBoxResult.Yes => await SaveProjectAsync(),
+            MessageBoxResult.No => true,
+            _ => false
+        };
+    }
+
+    private async Task OpenRecentProjectAsync(string path)
+    {
+        if (!File.Exists(path))
+        {
+            RemoveRecentProject(path);
+            Status = $"Recent project not found: {Path.GetFileName(path)}";
+            return;
+        }
+
+        await OpenProjectAsync(path);
+    }
+
+    private void OpenRecentImage(string path)
+    {
+        if (!File.Exists(path) || !IsSupportedSourceImageFile(path))
+        {
+            RemoveRecentImage(path);
+            Status = $"Recent image not found: {Path.GetFileName(path)}";
+            return;
+        }
+
+        SetSourceImage(path);
+    }
+
+    private void OpenRecentOutputDirectory(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            RemoveRecentOutputDirectory(path);
+            Status = $"Recent output folder not found: {Path.GetFileName(path)}";
+            return;
+        }
+
+        SetOutputDirectory(path);
     }
 
     private void ChooseSourceImage()
@@ -626,15 +848,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         if (dialog.ShowDialog() == true)
         {
-            OutputDirectory = CreateProjectPathForOutputDirectory(dialog.FolderName);
-            Validate();
-            if (CanAttemptSolve())
-            {
-                Solve();
-            }
-
-            Status = $"Output directory set: {OutputDirectory}";
+            SetOutputDirectory(dialog.FolderName);
         }
+    }
+
+    private void SetOutputDirectory(string directoryPath)
+    {
+        OutputDirectory = CreateProjectPathForOutputDirectory(directoryPath);
+        AddRecentOutputDirectory(directoryPath);
+        Validate();
+        if (CanAttemptSolve())
+        {
+            Solve();
+        }
+
+        Status = $"Output directory set: {OutputDirectory}";
     }
 
     private void Validate()
@@ -696,6 +924,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         SyncToProject();
         IsRendering = true;
         RenderPercent = 0;
+        RenderSummaryText = "Rendering...";
+        Status = "Starting render...";
         renderCancellation = new CancellationTokenSource();
         var progress = new Progress<TileRenderProgress>(p =>
         {
@@ -705,6 +935,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         try
         {
             var summary = await new RenderJobService().RenderAsync(project, progress, renderCancellation.Token);
+            AddRecentOutputDirectory(ResolveOutputDirectory());
             RenderSummaryText = $"{summary.TilesWritten} written, {summary.TilesSkipped} skipped in {summary.Duration.TotalSeconds:0.0}s";
             Status = $"Render complete: {summary.TilesWritten} written, {summary.TilesSkipped} skipped";
         }
@@ -736,6 +967,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         var path = ProjectPaths.Resolve(project, project.Output.Directory);
         Directory.CreateDirectory(path);
+        AddRecentOutputDirectory(path);
         Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
@@ -779,6 +1011,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(OutputDirectory));
         OnPropertyChanged(nameof(PreviewOpacity));
         OnPropertyChanged(nameof(TileSize));
+        OnPropertyChanged(nameof(RenderOptionsSummary));
     }
 
     private void ApplyAutoZoomRange(ZoomRangeRecommendation zoomRange)
@@ -995,6 +1228,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
 
         RememberOpenDirectory(imagePath);
+        AddRecentImage(imagePath);
         SourceImage = CreateProjectPathForSourceImage(imagePath);
         ResetAutoZoomRange();
         if (string.IsNullOrWhiteSpace(ProjectName) || ProjectName == "QTiles project")
@@ -1099,6 +1333,138 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         editorSettingsChanged?.Invoke();
     }
 
+    private void AddRecentProject(string path)
+    {
+        if (AddRecentPath(editorSettings.RecentProjects, path))
+        {
+            RefreshRecentFiles();
+            editorSettingsChanged?.Invoke();
+        }
+    }
+
+    private void AddRecentImage(string path)
+    {
+        if (AddRecentPath(editorSettings.RecentImages, path))
+        {
+            RefreshRecentFiles();
+            editorSettingsChanged?.Invoke();
+        }
+    }
+
+    private void AddRecentOutputDirectory(string path)
+    {
+        if (AddRecentPath(editorSettings.RecentOutputDirectories, path))
+        {
+            RefreshRecentFiles();
+            editorSettingsChanged?.Invoke();
+        }
+    }
+
+    private void RemoveRecentProject(string path)
+    {
+        if (RemoveRecentPath(editorSettings.RecentProjects, path))
+        {
+            RefreshRecentFiles();
+            editorSettingsChanged?.Invoke();
+        }
+    }
+
+    private void RemoveRecentImage(string path)
+    {
+        if (RemoveRecentPath(editorSettings.RecentImages, path))
+        {
+            RefreshRecentFiles();
+            editorSettingsChanged?.Invoke();
+        }
+    }
+
+    private void RemoveRecentOutputDirectory(string path)
+    {
+        if (RemoveRecentPath(editorSettings.RecentOutputDirectories, path))
+        {
+            RefreshRecentFiles();
+            editorSettingsChanged?.Invoke();
+        }
+    }
+
+    private void RefreshRecentFiles()
+    {
+        RefreshRecentCollection(RecentProjects, editorSettings.RecentProjects);
+        RefreshRecentCollection(RecentImages, editorSettings.RecentImages);
+        RefreshRecentCollection(RecentOutputDirectories, editorSettings.RecentOutputDirectories);
+        OnPropertyChanged(nameof(HasRecentProjects));
+        OnPropertyChanged(nameof(HasRecentImages));
+        OnPropertyChanged(nameof(HasRecentOutputDirectories));
+    }
+
+    private static void RefreshRecentCollection(
+        ObservableCollection<RecentFileViewModel> collection,
+        IEnumerable<string> paths)
+    {
+        collection.Clear();
+        foreach (var path in paths)
+        {
+            collection.Add(new RecentFileViewModel(path));
+        }
+    }
+
+    private static bool AddRecentPath(IList<string> paths, string path)
+    {
+        if (!TryNormalizeFilePath(path, out var normalizedPath))
+        {
+            return false;
+        }
+
+        var original = paths.ToArray();
+        RemoveRecentPath(paths, normalizedPath);
+        paths.Insert(0, normalizedPath);
+        while (paths.Count > MaxRecentItems)
+        {
+            paths.RemoveAt(paths.Count - 1);
+        }
+
+        return !paths.SequenceEqual(original, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool RemoveRecentPath(IList<string> paths, string path)
+    {
+        var changed = false;
+        for (var i = paths.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(paths[i], path, StringComparison.OrdinalIgnoreCase)
+                || (TryNormalizeFilePath(paths[i], out var existing)
+                    && TryNormalizeFilePath(path, out var normalizedPath)
+                    && string.Equals(existing, normalizedPath, StringComparison.OrdinalIgnoreCase)))
+            {
+                paths.RemoveAt(i);
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool TryNormalizeFilePath(string? path, out string normalizedPath)
+    {
+        normalizedPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            normalizedPath = Path.GetFullPath(path);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool HasPath(string? path) => !string.IsNullOrWhiteSpace(path);
+
     private static bool TryGetDirectoryForPath(string? path, out string directory)
     {
         directory = string.Empty;
@@ -1146,6 +1512,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    private static void ShowError(string title, string message)
+    {
+        var owner = Application.Current?.MainWindow;
+        if (owner is null)
+        {
+            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        MessageBox.Show(owner, message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
     public static bool IsSupportedSourceImageFile(string path)
     {
         var extension = Path.GetExtension(path);
@@ -1172,3 +1550,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         return normalized;
     }
 }
+
+public sealed class RecentFileViewModel
+{
+    public RecentFileViewModel(string filePath)
+    {
+        FilePath = filePath;
+        DisplayName = CreateDisplayName(filePath);
+        Folder = Path.GetDirectoryName(filePath) ?? string.Empty;
+    }
+
+    public string FilePath { get; }
+
+    public string DisplayName { get; }
+
+    public string Folder { get; }
+
+    private static string CreateDisplayName(string filePath)
+    {
+        var fileName = Path.GetFileName(filePath);
+        return string.IsNullOrWhiteSpace(fileName) ? filePath : fileName;
+    }
+}
+
+public sealed record RenderOptionsSnapshot(
+    int TileSize,
+    string Format,
+    int Quality,
+    string Resampling,
+    string Background,
+    bool SkipEmptyTiles,
+    bool Overwrite,
+    bool WriteTileJson);

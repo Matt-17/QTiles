@@ -1,5 +1,6 @@
 using NetVips;
 using QTiles.Core.Geo;
+using QTiles.Core.Rendering;
 using QTiles.Core.Transforms;
 
 namespace QTiles.Core.Imaging;
@@ -65,23 +66,39 @@ public sealed class NetVipsTileRenderer : IRenderedTileWriter
 
     private static Image RenderTile(Image source, RenderedTileRequest request)
     {
+        var oversampleFactor = RenderResampling.OversampleFactor(request.Options.Resampling);
+        if (oversampleFactor <= 1)
+        {
+            return RenderAffineTile(source, request, 1);
+        }
+
+        using var oversized = RenderAffineTile(source, request, oversampleFactor);
+        using var premultiplied = oversized.Premultiply();
+        using var resized = premultiplied.Resize(1.0 / oversampleFactor, kernel: Enums.Kernel.Lanczos3);
+        return resized.Unpremultiply();
+    }
+
+    private static Image RenderAffineTile(Image source, RenderedTileRequest request, int oversampleFactor)
+    {
         var transform = request.Transform;
         var scale = request.TileSize * Math.Pow(2.0, request.Tile.Z);
+        var outputScale = scale * oversampleFactor;
+        var outputTileSize = request.TileSize * oversampleFactor;
         var matrix = new[]
         {
-            transform.A * scale,
-            transform.B * scale,
-            transform.D * scale,
-            transform.E * scale
+            transform.A * outputScale,
+            transform.B * outputScale,
+            transform.D * outputScale,
+            transform.E * outputScale
         };
-        var odx = transform.C * scale - request.Tile.X * request.TileSize;
-        var ody = transform.F * scale - request.Tile.Y * request.TileSize;
-        var interpolator = Interpolate.NewFromName(ToInterpolatorName(request.Options.Resampling));
+        var odx = (transform.C * scale - request.Tile.X * request.TileSize) * oversampleFactor;
+        var ody = (transform.F * scale - request.Tile.Y * request.TileSize) * oversampleFactor;
+        var interpolator = Interpolate.NewFromName(RenderResampling.ToVipsInterpolatorName(request.Options.Resampling));
 
         return source.Affine(
             matrix,
             interpolate: interpolator,
-            oarea: [0, 0, request.TileSize, request.TileSize],
+            oarea: [0, 0, outputTileSize, outputTileSize],
             odx: odx,
             ody: ody,
             background: [0.0, 0.0, 0.0, 0.0],
@@ -142,15 +159,6 @@ public sealed class NetVipsTileRenderer : IRenderedTileWriter
 
     private static string NormalizeFormat(string format) =>
         format.Equals("jpeg", StringComparison.OrdinalIgnoreCase) ? "jpg" : format.ToLowerInvariant();
-
-    private static string ToInterpolatorName(string resampling) => resampling.Trim().ToLowerInvariant() switch
-    {
-        "nearest" or "nearest-neighbour" or "nearest-neighbor" => "nearest",
-        "bilinear" or "linear" => "bilinear",
-        "bicubic" => "bicubic",
-        "lanczos2" => "lbb",
-        _ => "bicubic"
-    };
 
     private static double[] ParseBackground(string background)
     {

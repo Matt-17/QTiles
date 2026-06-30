@@ -174,6 +174,103 @@
             <Setter Property="FontSize" Value="12" />
         </Style>
 
+        <Style x:Key="SplitArrowButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="30" />
+            <Setter Property="MinWidth" Value="30" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="-1,0,3,0" />
+            <Setter Property="ToolTip" Value="Recent files" />
+        </Style>
+
+        <Style x:Key="FieldIconButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="38" />
+            <Setter Property="MinWidth" Value="38" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0" />
+        </Style>
+
+        <Style x:Key="DarkContextMenuStyle" TargetType="{x:Type ContextMenu}">
+            <Setter Property="Background" Value="#15191F" />
+            <Setter Property="BorderBrush" Value="#3BAA8D" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="2" />
+            <Setter Property="MinWidth" Value="174" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ContextMenu}">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"
+                                            SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="DarkMenuItemStyle" TargetType="{x:Type MenuItem}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource TextStrong}" />
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type MenuItem}">
+                        <Border x:Name="ItemBorder"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ContentPresenter x:Name="IconSite"
+                                                  ContentSource="Icon"
+                                                  Margin="0,0,8,0"
+                                                  VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                                <ContentPresenter Grid.Column="1"
+                                                  ContentSource="Header"
+                                                  RecognizesAccessKey="True"
+                                                  VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Icon" Value="{x:Null}">
+                                <Setter TargetName="IconSite" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="IconSite" Property="Margin" Value="0" />
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#243A37" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#68717E" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="DarkMenuSeparatorStyle" TargetType="{x:Type Separator}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Separator}">
+                        <Border Height="1"
+                                Margin="8,4"
+                                Background="#343B45" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="#15191F" />
             <Setter Property="Foreground" Value="{StaticResource TextStrong}" />
@@ -471,22 +568,34 @@
 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="QTiles" Foreground="{StaticResource TextStrong}" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,18,0" />
-                    <Button Command="{Binding OpenCommand}" ToolTip="Open a QTiles YAML project or choose a source image">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE8E5;" Style="{StaticResource ButtonIcon}" />
-                            <TextBlock Text="Open..." />
-                        </StackPanel>
-                    </Button>
+                    <Grid Margin="3,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button Command="{Binding OpenCommand}"
+                                ToolTip="Open a QTiles YAML project or choose a source image"
+                                Margin="0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8E5;" Style="{StaticResource ButtonIcon}" />
+                                <TextBlock Text="Open..." />
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="1"
+                                Style="{StaticResource SplitArrowButton}"
+                                IsEnabled="{Binding HasRecentProjects}"
+                                Click="RecentDropDownButton_Click"
+                                Tag="Projects"
+                                ToolTip="Recent projects">
+                            <TextBlock Text="&#xE70D;"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="11" />
+                        </Button>
+                    </Grid>
                     <Button Command="{Binding SaveCommand}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE74E;" Style="{StaticResource ButtonIcon}" />
                             <TextBlock Text="Save" />
-                        </StackPanel>
-                    </Button>
-                    <Button Command="{Binding ChooseSourceImageCommand}" ToolTip="Choose the source image for this project">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xEB9F;" Style="{StaticResource ButtonIcon}" />
-                            <TextBlock Text="Image..." />
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -495,18 +604,7 @@
 
         <Border DockPanel.Dock="Bottom" Background="#111419" BorderBrush="#343B45" BorderThickness="0,1,0,0">
             <Grid Height="42" Margin="14,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="260" />
-                </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding Status}" Foreground="{StaticResource TextStrong}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                <ProgressBar Grid.Column="1"
-                             Value="{Binding RenderPercent}"
-                             Minimum="0"
-                             Maximum="100"
-                             Height="8"
-                             VerticalAlignment="Center"
-                             Foreground="{StaticResource Accent}" />
             </Grid>
         </Border>
 
@@ -661,11 +759,28 @@
                                      AllowDrop="True"
                                      PreviewDragOver="SourceImageDropTarget_PreviewDragOver"
                                      PreviewDrop="SourceImageDropTarget_Drop" />
-                            <Button Grid.Column="2"
-                                    Content="Browse"
-                                    Command="{Binding ChooseSourceImageCommand}"
-                                    MinWidth="74"
-                                    Margin="0" />
+                            <Grid Grid.Column="2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button Style="{StaticResource FieldIconButton}"
+                                        Command="{Binding ChooseSourceImageCommand}"
+                                        ToolTip="Choose source image">
+                                    <TextBlock Text="&#xEB9F;" Style="{StaticResource CompactButtonIcon}" />
+                                </Button>
+                                <Button Grid.Column="1"
+                                        Style="{StaticResource SplitArrowButton}"
+                                        IsEnabled="{Binding HasRecentImages}"
+                                        Click="RecentDropDownButton_Click"
+                                        Tag="Images"
+                                        ToolTip="Recent images"
+                                        Margin="-1,0,0,0">
+                                    <TextBlock Text="&#xE70D;"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="11" />
+                                </Button>
+                            </Grid>
                         </Grid>
 
                         <TextBlock Text="Output directory" Style="{StaticResource FieldLabel}" />
@@ -676,11 +791,28 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBox Text="{Binding OutputDirectory, UpdateSourceTrigger=PropertyChanged}" />
-                            <Button Grid.Column="2"
-                                    Content="Browse"
-                                    Command="{Binding ChooseOutputDirectoryCommand}"
-                                    MinWidth="74"
-                                    Margin="0" />
+                            <Grid Grid.Column="2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button Style="{StaticResource FieldIconButton}"
+                                        Command="{Binding ChooseOutputDirectoryCommand}"
+                                        ToolTip="Choose output directory">
+                                    <TextBlock Text="&#xE838;" Style="{StaticResource CompactButtonIcon}" />
+                                </Button>
+                                <Button Grid.Column="1"
+                                        Style="{StaticResource SplitArrowButton}"
+                                        IsEnabled="{Binding HasRecentOutputDirectories}"
+                                        Click="RecentDropDownButton_Click"
+                                        Tag="OutputDirectories"
+                                        ToolTip="Recent output folders"
+                                        Margin="-1,0,0,0">
+                                    <TextBlock Text="&#xE70D;"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="11" />
+                                </Button>
+                            </Grid>
                         </Grid>
 
                         <Grid Margin="0,10,0,0">
@@ -751,7 +883,23 @@
 
                         <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,12,0,0" Padding="12">
                             <StackPanel>
-                                <TextBlock Text="Render" Foreground="{StaticResource TextStrong}" FontWeight="SemiBold" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Render" Foreground="{StaticResource TextStrong}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Style="{StaticResource FieldIconButton}"
+                                            Click="RenderOptionsButton_Click"
+                                            ToolTip="Render options"
+                                            Margin="0">
+                                        <TextBlock Text="&#xE713;"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="14" />
+                                    </Button>
+                                </Grid>
+                                <TextBlock Text="{Binding RenderOptionsSummary}" Foreground="{StaticResource Accent}" FontSize="12" Margin="0,6,0,0" />
                                 <TextBlock Text="{Binding RenderSummaryText}" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0" />
                                 <ProgressBar Value="{Binding RenderPercent}" Minimum="0" Maximum="100" Height="8" Margin="0,12,0,0" Foreground="{StaticResource Accent}" />
                                 <WrapPanel Margin="0,12,0,0">
@@ -816,13 +964,19 @@
                                            Style="{StaticResource PaneCaption}"
                                            VerticalAlignment="Center"
                                            Margin="0,0,12,0" />
-                                <Button Style="{StaticResource CompactButton}" Click="CenterSelectedPoint_Click">
+                                <Button Style="{StaticResource CompactButton}"
+                                        Click="CenterSelectedPoint_Click"
+                                        IsEnabled="{Binding HasSelectedPoint}">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE8A3;" Style="{StaticResource ButtonIcon}" />
                                         <TextBlock Text="Center point" />
                                     </StackPanel>
                                 </Button>
-                                <Button Style="{StaticResource CompactButton}" Command="{Binding DeletePointCommand}" Background="#3A2830" BorderBrush="#70424D">
+                                <Button Style="{StaticResource CompactButton}"
+                                        Command="{Binding DeletePointCommand}"
+                                        IsEnabled="{Binding HasSelectedPoint}"
+                                        Background="#3A2830"
+                                        BorderBrush="#70424D">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE74D;" Style="{StaticResource ButtonIcon}" />
                                         <TextBlock Text="Delete" />

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -140,6 +141,64 @@ public partial class MainWindow : Window
 
         CaptureEditorSettings();
         settingsService.Save(editorSettings);
+    }
+
+    private void RecentDropDownButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button)
+        {
+            return;
+        }
+
+        var menu = button.Tag switch
+        {
+            "Projects" => CreateRecentFileMenu(viewModel.RecentProjects, viewModel.OpenRecentProjectCommand),
+            "Images" => CreateRecentFileMenu(viewModel.RecentImages, viewModel.OpenRecentImageCommand),
+            "OutputDirectories" => CreateRecentFileMenu(
+                viewModel.RecentOutputDirectories,
+                viewModel.OpenRecentOutputDirectoryCommand),
+            _ => null
+        };
+
+        if (menu is null || menu.Items.Count == 0)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        menu.PlacementTarget = button;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private void RenderOptionsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new RenderOptionsDialog(viewModel.CreateRenderOptionsSnapshot())
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            viewModel.ApplyRenderOptions(dialog.Options.ToSnapshot());
+        }
+    }
+
+    private ContextMenu CreateRecentFileMenu(
+        IEnumerable<RecentFileViewModel> recentFiles,
+        ICommand command)
+    {
+        var menu = CreateStyledContextMenu();
+        foreach (var recentFile in recentFiles)
+        {
+            var item = CreateStyledMenuItem(recentFile.DisplayName, "");
+            item.ToolTip = recentFile.FilePath;
+            item.Command = command;
+            item.CommandParameter = recentFile.FilePath;
+            menu.Items.Add(item);
+        }
+
+        return menu;
     }
 
     private void ApplyWindowSettings(EditorWindowSettings settings)
@@ -966,7 +1025,7 @@ public partial class MainWindow : Window
 
     private ContextMenu CreateMarkerContextMenu(ControlPointViewModel point)
     {
-        var menu = new ContextMenu();
+        var menu = CreateStyledContextMenu();
         var enabledItem = CreateMarkerMenuItem("", "");
         UpdateEnabledMenuItem(enabledItem, point);
         menu.Opened += (_, _) => UpdateEnabledMenuItem(enabledItem, point);
@@ -1011,6 +1070,17 @@ public partial class MainWindow : Window
         return menu;
     }
 
+    private ContextMenu CreateStyledContextMenu()
+    {
+        var menu = new ContextMenu
+        {
+            Style = (Style)FindResource("DarkContextMenuStyle")
+        };
+        menu.Resources[typeof(MenuItem)] = FindResource("DarkMenuItemStyle");
+        menu.Resources[typeof(Separator)] = FindResource("DarkMenuSeparatorStyle");
+        return menu;
+    }
+
     private static void UpdateEnabledMenuItem(MenuItem enabledItem, ControlPointViewModel point)
     {
         enabledItem.Header = point.Enabled ? "Disable marker" : "Enable marker";
@@ -1029,19 +1099,28 @@ public partial class MainWindow : Window
         }
     }
 
-    private static MenuItem CreateMarkerMenuItem(string header, string icon)
+    private MenuItem CreateMarkerMenuItem(string header, string icon)
+        => CreateStyledMenuItem(header, icon);
+
+    private MenuItem CreateStyledMenuItem(string header, string icon)
     {
-        return new MenuItem
+        var item = new MenuItem
         {
             Header = header,
-            Icon = new TextBlock
+            Style = (Style)FindResource("DarkMenuItemStyle")
+        };
+        if (!string.IsNullOrEmpty(icon))
+        {
+            item.Icon = new TextBlock
             {
                 Text = icon,
                 FontFamily = new FontFamily("Segoe MDL2 Assets"),
                 FontSize = 13,
                 VerticalAlignment = VerticalAlignment.Center
-            }
-        };
+            };
+        }
+
+        return item;
     }
 
     private void AddBaseMapLayer(Mapsui.Map map)

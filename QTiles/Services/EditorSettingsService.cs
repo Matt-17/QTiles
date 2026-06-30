@@ -63,7 +63,32 @@ public sealed class EditorSettingsService
         settings.Window ??= new EditorWindowSettings();
         settings.LastMapView ??= new EditorMapViewSettings();
         settings.LastOpenDirectory ??= string.Empty;
+        settings.RecentProjects = NormalizeRecentPaths(settings.RecentProjects);
+        settings.RecentImages = NormalizeRecentPaths(settings.RecentImages);
+        settings.RecentOutputDirectories = NormalizeRecentPaths(settings.RecentOutputDirectories);
         return settings;
+    }
+
+    private static List<string> NormalizeRecentPaths(IEnumerable<string>? paths)
+    {
+        if (paths is null)
+        {
+            return [];
+        }
+
+        var normalizedPaths = new List<string>();
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path)
+                || normalizedPaths.Any(existing => string.Equals(existing, path, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            normalizedPaths.Add(path);
+        }
+
+        return normalizedPaths;
     }
 }
 
@@ -73,6 +98,9 @@ public sealed class EditorSettings
     public EditorWindowSettings Window { get; set; } = new();
     public EditorMapViewSettings LastMapView { get; set; } = new();
     public string LastOpenDirectory { get; set; } = string.Empty;
+    public List<string> RecentProjects { get; set; } = [];
+    public List<string> RecentImages { get; set; } = [];
+    public List<string> RecentOutputDirectories { get; set; } = [];
 }
 
 public sealed class EditorWindowSettings

@@ -1,3 +1,5 @@
+using QTiles.Core.Rendering;
+
 namespace QTiles.Core.Config;
 
 public sealed class QTilesProject
@@ -50,8 +52,8 @@ public sealed class RenderConfig
     public int MaxZoom { get; set; }
     public string Format { get; set; } = "png";
     public int Quality { get; set; } = 90;
-    public string Resampling { get; set; } = "lanczos3";
-    public string Background { get; set; } = "transparent";
+    public string Resampling { get; set; } = RenderResampling.Default;
+    public string Background { get; set; } = "white";
     public bool SkipEmptyTiles { get; set; } = true;
     public bool Overwrite { get; set; } = true;
     public string Bounds { get; set; } = "auto";

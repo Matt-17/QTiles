@@ -233,6 +233,22 @@ public sealed class RendererTests
     }
 
     [TestMethod]
+    public async Task Renderer_DefaultHighQualityPath_WritesExpectedTileSize()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        WriteRgbSource(source, 4, 4);
+        var project = FullWorldProject(source, temp.Path, tileSize: 2);
+        project.Render.Resampling = RenderResampling.Default;
+
+        await new TileRenderer().RenderAsync(project, null, CancellationToken.None);
+
+        using var rendered = Image.NewFromFile(Path.Combine(temp.Path, "1", "1", "0.png"));
+        Assert.AreEqual(2, rendered.Width);
+        Assert.AreEqual(2, rendered.Height);
+    }
+
+    [TestMethod]
     public async Task Renderer_SkipEmptyTiles_Works()
     {
         using var temp = new TempFolder();
@@ -283,6 +299,24 @@ public sealed class RendererTests
         {
             TestAssert.InRange(request.Tile.Z, summary.MinZoom, summary.MaxZoom);
         }
+    }
+
+    [TestMethod]
+    public void RenderConfig_DefaultResampling_UsesHighQualityInterpolator()
+    {
+        var render = new RenderConfig();
+
+        Assert.AreEqual(RenderResampling.NoHalo, render.Resampling);
+        Assert.AreEqual("nohalo", RenderResampling.ToVipsInterpolatorName(render.Resampling));
+        Assert.AreEqual(4, RenderResampling.OversampleFactor(render.Resampling));
+    }
+
+    [TestMethod]
+    public void RenderResampling_NormalizesLegacyLanczosAlias()
+    {
+        Assert.AreEqual(RenderResampling.NoHalo, RenderResampling.Normalize("lanczos3"));
+        Assert.IsTrue(RenderResampling.IsSupported("lanczos3"));
+        Assert.AreEqual("nohalo", RenderResampling.ToVipsInterpolatorName("lanczos3"));
     }
 
     private static QTilesProject Project(string source, string output) => new()

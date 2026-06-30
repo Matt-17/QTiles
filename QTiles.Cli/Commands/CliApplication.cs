@@ -240,6 +240,7 @@ public static class RenderCommand
 
         if (reader.Get("format") is { } format) project.Render.Format = format;
         if (int.TryParse(reader.Get("quality"), out var quality)) project.Render.Quality = quality;
+        if (reader.Get("resampling") is { } resampling) project.Render.Resampling = resampling;
         if (reader.Has("overwrite")) project.Render.Overwrite = true;
         if (reader.Has("no-tilejson")) project.Output.TileJson = false;
     }
