@@ -10,9 +10,9 @@ using QTiles.Core.Imaging;
 using QTiles.Core.Rendering;
 using QTiles.Core.Transforms;
 using QTiles.Core.Validation;
-using QTiles.Editor.Wpf.Services;
+using QTiles.Services;
 
-namespace QTiles.Editor.Wpf.ViewModels;
+namespace QTiles.ViewModels;
 
 public sealed class MainWindowViewModel : INotifyPropertyChanged
 {

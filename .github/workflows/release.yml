@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish release artifacts
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve version from tag
+        id: resolve_version
+        shell: pwsh
+        run: |
+          if (-not "${{ github.ref_name }}".StartsWith("v")) {
+            Write-Error "Tag must start with 'v'."
+            exit 1
+          }
+          $version = "${{ github.ref_name }}".Substring(1)
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Error "Tag must be in the form vX.Y.Z. Found '${version}'."
+            exit 1
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore QTiles.slnx
+
+      - name: Build
+        run: >
+          dotnet build QTiles.slnx
+          --configuration Release
+          --no-restore
+          --disable-build-servers
+          /m:1
+          /p:BuildInParallel=false
+          -p:UseSharedCompilation=false
+
+      - name: Test
+        run: dotnet test QTiles.slnx --configuration Release --no-build --disable-build-servers
+
+      - name: Build and publish win-x64 app
+        run: >
+          dotnet publish QTiles/QTiles.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          -p:Version=${{ steps.resolve_version.outputs.version }}
+          -p:ProductVersion=${{ steps.resolve_version.outputs.version }}
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishReadyToRun=false
+          -p:UseSharedCompilation=false
+          --disable-build-servers
+          --output artifacts/publish/QTiles/Release/win-x64
+
+      - name: Build and publish win-x64 CLI
+        run: >
+          dotnet publish QTiles.Cli/QTiles.Cli.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          -p:Version=${{ steps.resolve_version.outputs.version }}
+          -p:ProductVersion=${{ steps.resolve_version.outputs.version }}
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishReadyToRun=false
+          -p:UseSharedCompilation=false
+          --disable-build-servers
+          --output artifacts/publish/QTiles/Release/win-x64
+
+      - name: Build MSI
+        run: dotnet build QTiles.Installer/QTiles.Installer.wixproj --configuration Release -p:ProductVersion=${{ steps.resolve_version.outputs.version }} -p:UseSharedCompilation=false
+
+      - name: Collect MSI path
+        id: collect_msi
+        shell: pwsh
+        run: |
+          $msi = "QTiles.Installer/bin/x64/Release/QTiles-${{ steps.resolve_version.outputs.version }}-x64.msi"
+          if (-not (Test-Path $msi)) {
+            throw "Missing MSI at $msi"
+          }
+          echo "path=$msi" >> $env:GITHUB_OUTPUT
+
+      - name: Extract release notes from tag
+        shell: pwsh
+        run: |
+          git fetch --force --tags
+          $notes = git tag -l "${{ github.ref_name }}" --format="%(contents)"
+          if ([string]::IsNullOrWhiteSpace($notes)) {
+            $notes = "QTiles ${{ steps.resolve_version.outputs.version }}"
+          }
+          $notes | Out-File -FilePath release-notes.md -Encoding utf8
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: ${{ steps.collect_msi.outputs.path }}
+
+      - name: Check Winget package registration
+        id: winget_package
+        if: ${{ env.WINGET_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          $packageId = "Code-iX.QTiles"
+          $packagePath = "manifests/$($packageId.ToLowerInvariant()[0])/$($packageId.Replace('.', '/'))"
+          $url = "https://github.com/microsoft/winget-pkgs/tree/master/$packagePath"
+          try {
+            Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -ErrorAction Stop | Out-Null
+            echo "exists=true" >> $env:GITHUB_OUTPUT
+          }
+          catch {
+            Write-Warning "$packageId is not in winget-pkgs yet. Submit the first version manually with wingetcreate; automated updates will run after it is merged."
+            echo "exists=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Submit or update Winget package
+        if: ${{ env.WINGET_TOKEN != '' && steps.winget_package.outputs.exists == 'true' }}
+        uses: vedantmgoyal2009/winget-releaser@v2
+        with:
+          identifier: Code-iX.QTiles
+          installers-regex: '^QTiles-\d+\.\d+\.\d+-x64\.msi$'
+          release-tag: ${{ github.ref_name }}
+          version: ${{ steps.resolve_version.outputs.version }}
+          token: ${{ env.WINGET_TOKEN }}

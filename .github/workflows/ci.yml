@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore QTiles.slnx
+
+      - name: Build
+        run: >
+          dotnet build QTiles.slnx
+          --configuration Release
+          --no-restore
+          --disable-build-servers
+          /m:1
+          /p:BuildInParallel=false
+          -p:UseSharedCompilation=false
+
+      - name: Test
+        run: dotnet test QTiles.slnx --configuration Release --no-build --disable-build-servers
+
+      - name: Publish app
+        run: >
+          dotnet publish QTiles/QTiles.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishReadyToRun=false
+          -p:UseSharedCompilation=false
+          --disable-build-servers
+          --output artifacts/publish/QTiles/Release/win-x64
+
+      - name: Publish CLI
+        run: >
+          dotnet publish QTiles.Cli/QTiles.Cli.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishReadyToRun=false
+          -p:UseSharedCompilation=false
+          --disable-build-servers
+          --output artifacts/publish/QTiles/Release/win-x64
+
+      - name: Build MSI
+        run: dotnet build QTiles.Installer/QTiles.Installer.wixproj --configuration Release -p:ProductVersion=1.0.0 -p:UseSharedCompilation=false
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: QTiles-win-x64
+          path: artifacts/publish/QTiles/Release/win-x64/
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: QTiles-installer
+          path: QTiles.Installer/bin/x64/Release/QTiles-*.msi

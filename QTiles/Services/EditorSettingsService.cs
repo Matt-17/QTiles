@@ -1,7 +1,7 @@
 using System.IO;
 using System.Text.Json;
 
-namespace QTiles.Editor.Wpf.Services;
+namespace QTiles.Services;
 
 public sealed class EditorSettingsService
 {

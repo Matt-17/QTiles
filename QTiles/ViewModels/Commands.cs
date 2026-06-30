@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace QTiles.Editor.Wpf.ViewModels;
+namespace QTiles.ViewModels;
 
 public sealed class RelayCommand(Action execute, Func<bool>? canExecute = null) : ICommand
 {

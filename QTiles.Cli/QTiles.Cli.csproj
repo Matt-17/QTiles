@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\QTiles.Core\QTiles.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>QTiles.Cli</AssemblyName>
+    <RootNamespace>QTiles.Cli</RootNamespace>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>qtiles</ToolCommandName>
+    <PackageId>QTiles.Cli</PackageId>
+    <Version Condition="'$(ProductVersion)' != ''">$(ProductVersion)</Version>
+    <Version Condition="'$(ProductVersion)' == ''">1.0.0</Version>
+    <Company>Code-iX</Company>
+    <Product>QTiles CLI</Product>
+    <Authors>Code-iX</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Description>Command-line host for QTiles validation and rendering.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.9" />
+    <PackageReference Include="Spectre.Console" Version="0.57.1" />
+  </ItemGroup>
+
+</Project>

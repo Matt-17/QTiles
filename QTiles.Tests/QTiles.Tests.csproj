@@ -19,8 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\QTiles.Core\QTiles.Core.csproj" />
-    <ProjectReference Include="..\..\src\QTiles.Cli\QTiles.Cli.csproj" />
+    <ProjectReference Include="..\QTiles.Core\QTiles.Core.csproj" />
+    <ProjectReference Include="..\QTiles.Cli\QTiles.Cli.csproj" />
   </ItemGroup>
 
 </Project>

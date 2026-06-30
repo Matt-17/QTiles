@@ -279,10 +279,10 @@ public static class EditorCommand
         }
 
         var projectPath = args.FirstOrDefault() ?? "";
-        var editorDll = Path.Combine(AppContext.BaseDirectory, "QTiles.Editor.Wpf.exe");
+        var editorDll = Path.Combine(AppContext.BaseDirectory, "QTiles.exe");
         if (!File.Exists(editorDll))
         {
-            Console.Error.WriteLine("QTiles.Editor.Wpf is not available next to the CLI.");
+            Console.Error.WriteLine("QTiles is not available next to the CLI.");
             return 2;
         }
 

@@ -3,7 +3,7 @@ using QTiles.Core.Config;
 using QTiles.Core.Geo;
 using NetVips;
 
-namespace QTiles.Cli.Tests;
+namespace QTiles.Tests;
 
 public sealed class CliTests
 {

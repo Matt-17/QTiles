@@ -18,7 +18,9 @@ Build **QTiles / QuickTiles** as a shared rendering engine plus two front ends:
 ```text
 QTiles.Core        -> YAML, georeferencing, tile math, NetVips rendering
 QTiles.Cli         -> dotnet tool command: qtiles
-QTiles.Editor.Wpf  -> Windows WPF editor using Mapsui
+QTiles             -> Windows WPF editor using Mapsui
+QTiles.Installer   -> per-user MSI for QTiles.exe and QTiles.Cli.exe
+QTiles.Tests       -> xUnit tests for core and CLI behavior
 ```
 
 The editor should **not shell out to the CLI** for normal work. Both the CLI and the WPF editor should call `QTiles.Core`. The CLI remains scriptable and automatable; the editor is a comfortable visual YAML authoring and rendering shell.
@@ -78,90 +80,32 @@ Codex should create this structure:
 ```text
 QTiles.sln
 
-src/
-  QTiles.Core/
-    Config/
-      QTilesProject.cs
-      SourceConfig.cs
-      GeoreferenceConfig.cs
-      RenderConfig.cs
-      OutputConfig.cs
-      EditorConfig.cs
-      ControlPointConfig.cs
-      QTilesYamlSerializer.cs
+QTiles.Core/
+  Config/
+  Geo/
+  Imaging/
+  Rendering/
+  Transforms/
+  Validation/
 
-    Geo/
-      WebMercator.cs
-      TileMath.cs
-      TileCoord.cs
-      TileRange.cs
-      GeoBounds.cs
-      NormalizedMercatorPoint.cs
+QTiles.Cli/
+  Program.cs
+  Commands/
 
-    Transforms/
-      IGeoTransform.cs
-      SimilarityTransform.cs
-      AffineTransform.cs
-      TransformSolver.cs
-      TransformSolveResult.cs
-      ControlPointError.cs
+QTiles/
+  App.xaml
+  MainWindow.xaml
+  MainWindow.xaml.cs
+  ViewModels/
+  Services/
 
-    Imaging/
-      IImageInfoReader.cs
-      NetVipsImageInfoReader.cs
-      IRenderedTileWriter.cs
-      NetVipsTileRenderer.cs
-      TileRenderOptions.cs
+QTiles.Installer/
+  QTiles.Installer.wixproj
+  Package.wxs
 
-    Rendering/
-      TileRenderer.cs
-      TileRenderJob.cs
-      TileRenderProgress.cs
-      RenderSummary.cs
-      TileJsonWriter.cs
-
-    Validation/
-      ProjectValidator.cs
-      ValidationMessage.cs
-
-  QTiles.Cli/
-    Program.cs
-    Commands/
-      InitCommand.cs
-      ValidateCommand.cs
-      SolveCommand.cs
-      RenderCommand.cs
-      TileJsonCommand.cs
-      EditorCommand.cs
-
-  QTiles.Editor.Wpf/
-    App.xaml
-    MainWindow.xaml
-    MainWindow.xaml.cs
-    Views/
-      WorldMapView.xaml
-      ImageMapView.xaml
-      ControlPointsGrid.xaml
-      RenderPanel.xaml
-      ProjectPanel.xaml
-    ViewModels/
-      MainWindowViewModel.cs
-      ControlPointViewModel.cs
-      RenderSettingsViewModel.cs
-    Services/
-      EditorProjectService.cs
-      MapsuiWorldMapService.cs
-      ImageMapService.cs
-      PointPairingService.cs
-      RenderJobService.cs
-      DialogService.cs
-    Themes/
-      Colors.xaml
-      Controls.xaml
-
-tests/
-  QTiles.Core.Tests/
-  QTiles.Cli.Tests/
+QTiles.Tests/
+  CoreTests.cs
+  CliTests.cs
 ```
 
 ---
@@ -197,7 +141,7 @@ Spectre.Console
 
 `Spectre.Console` is optional but useful for tables, validation output, and progress display.
 
-### `QTiles.Editor.Wpf`
+### `QTiles`
 
 Use:
 
@@ -232,11 +176,11 @@ SkiaSharp is a .NET 2D graphics API based on Google’s Skia engine, with WPF vi
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="NetVips" Version="*" />
-    <PackageReference Include="NetVips.Native" Version="*" />
-    <PackageReference Include="YamlDotNet" Version="*" />
-    <PackageReference Include="MathNet.Numerics" Version="*" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="*" />
+    <PackageReference Include="NetVips" Version="3.2.0" />
+    <PackageReference Include="NetVips.Native" Version="8.18.3" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+    <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
   </ItemGroup>
 
 </Project>
@@ -256,37 +200,41 @@ SkiaSharp is a .NET 2D graphics API based on Google’s Skia engine, with WPF vi
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>qtiles</ToolCommandName>
     <PackageId>QTiles.Cli</PackageId>
-    <AssemblyName>QTiles</AssemblyName>
+    <AssemblyName>QTiles.Cli</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\QTiles.Core\QTiles.Core.csproj" />
-    <PackageReference Include="System.CommandLine" Version="*" />
-    <PackageReference Include="Spectre.Console" Version="*" />
+    <PackageReference Include="System.CommandLine" Version="2.0.9" />
+    <PackageReference Include="Spectre.Console" Version="0.57.1" />
   </ItemGroup>
 
 </Project>
 ```
 
-### `QTiles.Editor.Wpf.csproj`
+### `QTiles.csproj`
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <AssemblyName>QTiles</AssemblyName>
+    <RootNamespace>QTiles</RootNamespace>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\QTiles.ico</ApplicationIcon>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\QTiles.Core\QTiles.Core.csproj" />
-    <PackageReference Include="Mapsui.Wpf" Version="*" />
-    <PackageReference Include="CommunityToolkit.Mvvm" Version="*" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="*" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="*" />
+    <PackageReference Include="Mapsui.Wpf" Version="5.1.0" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
   </ItemGroup>
 
 </Project>
@@ -535,7 +483,7 @@ TileJSON is useful as tileset metadata: it describes name, attribution, bounds, 
 On Windows:
 
 ```text
-- Launch QTiles.Editor.Wpf if available.
+- Launch QTiles if available.
 - Pass the YAML path.
 ```
 
@@ -1469,7 +1417,7 @@ validation panel
 Definition of done:
 
 ```text
-QTiles.Editor.Wpf opens qtiles.yaml and shows source image path/settings
+QTiles opens qtiles.yaml and shows source image path/settings
 ```
 
 ### Milestone 7: Mapsui world map
@@ -1584,7 +1532,7 @@ Use this as the implementation directive:
 ```text
 Implement QTiles as a .NET 10 solution.
 
-Create QTiles.Core, QTiles.Cli, QTiles.Editor.Wpf, and tests.
+Create QTiles.Core, QTiles.Cli, QTiles, QTiles.Installer, and QTiles.Tests.
 
 QTiles.Core must contain all business logic:
 - YAML project model
@@ -1599,7 +1547,7 @@ QTiles.Core must contain all business logic:
 QTiles.Cli must be a dotnet tool named qtiles.
 It must expose init, validate, solve, render, tilejson, and editor commands.
 
-QTiles.Editor.Wpf must reference QTiles.Core directly.
+QTiles must reference QTiles.Core directly.
 It must not invoke the CLI for normal rendering.
 Use Mapsui for the world map and preferably for the image-space pane too.
 The editor must let the user create, edit, enable/disable, name, and delete control points.

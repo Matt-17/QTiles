@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\QTiles.Core\QTiles.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>QTiles</AssemblyName>
+    <RootNamespace>QTiles</RootNamespace>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\QTiles.ico</ApplicationIcon>
+    <Version Condition="'$(ProductVersion)' != ''">$(ProductVersion)</Version>
+    <Version Condition="'$(ProductVersion)' == ''">1.0.0</Version>
+    <Company>Code-iX</Company>
+    <Product>QTiles</Product>
+    <Authors>Code-iX</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Description>Visual georeferencing and tile rendering editor.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Mapsui.Wpf" Version="5.1.0" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\QTiles.ico" />
+  </ItemGroup>
+
+</Project>

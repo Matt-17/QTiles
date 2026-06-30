@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using QTiles.Core.Config;
 
-namespace QTiles.Editor.Wpf.ViewModels;
+namespace QTiles.ViewModels;
 
 public sealed class ControlPointViewModel : INotifyPropertyChanged
 {

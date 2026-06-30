@@ -1,11 +1,11 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/QTiles.Cli/QTiles.Cli.csproj" />
-    <Project Path="src/QTiles.Core/QTiles.Core.csproj" />
-    <Project Path="src/QTiles.Editor.Wpf/QTiles.Editor.Wpf.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/QTiles.Cli.Tests/QTiles.Cli.Tests.csproj" />
-    <Project Path="tests/QTiles.Core.Tests/QTiles.Core.Tests.csproj" />
-  </Folder>
+  <Project Path="QTiles.Core/QTiles.Core.csproj" />
+  <Project Path="QTiles/QTiles.csproj" />
+  <Project Path="QTiles.Cli/QTiles.Cli.csproj" />
+  <Project Path="QTiles.Installer/QTiles.Installer.wixproj" Type="b7dd6f7e-def8-4e67-b5b7-07ef123db6f0">
+    <Platform Project="x64" />
+    <!-- Excluded from solution builds; the MSI is produced by the dedicated "Build MSI" CI step. -->
+    <Build Project="false" />
+  </Project>
+  <Project Path="QTiles.Tests/QTiles.Tests.csproj" />
 </Solution>

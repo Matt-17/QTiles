@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="QTiles"
+    Manufacturer="Code-iX"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="{B600AD2A-45E6-44A7-BD5D-B5CCE2FB443A}"
+    Language="1033"
+    Scope="perUser">
+
+    <SummaryInformation Description="QTiles Installer" Manufacturer="Code-iX" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of QTiles is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon.ico" SourceFile="..\QTiles\Assets\QTiles.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPCOMMENTS" Value="Visual georeferencing and tile rendering editor." />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Matt-17/QTiles/issues" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Matt-17/QTiles" />
+    <Property Id="DISABLEADVTSHORTCUTS" Value="1" />
+
+    <Feature Id="MainFeature" Title="QTiles" Level="1">
+      <ComponentGroupRef Id="AppComponents" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="QTiles">
+          <Directory Id="AssetsFolder" Name="Assets" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="{D132336A-EF63-474F-A979-FE62F349B1E9}">
+        <File Id="QTilesExe" Source="$(var.PublishDir)\QTiles.exe" />
+        <File Id="QTilesCliExe" Source="$(var.PublishDir)\QTiles.Cli.exe" />
+        <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Code-iX\QTiles" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+      </Component>
+
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="{16A50F94-5E3D-4F01-B69E-972AC8D28655}">
+        <Shortcut
+          Id="AppShortcut"
+          Name="QTiles"
+          Description="QTiles editor"
+          Target="[INSTALLFOLDER]QTiles.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="AppIcon.ico"
+          IconIndex="0" />
+        <RegistryValue Root="HKCU" Key="Software\Code-iX\QTiles" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="LogoAssets" Directory="AssetsFolder" Guid="{F72D9474-742D-42B5-B1D9-F0C57FDD4F3E}">
+        <File Id="QTilesIconAsset" Source="..\QTiles\Assets\QTiles.ico" />
+        <RemoveFolder Id="RemoveAssetsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Code-iX\QTiles" Name="LogoAssets" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

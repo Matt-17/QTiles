@@ -1,7 +1,7 @@
-﻿<Application x:Class="QTiles.Editor.Wpf.App"
+<Application x:Class="QTiles.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:QTiles.Editor.Wpf"
+             xmlns:local="clr-namespace:QTiles"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
          

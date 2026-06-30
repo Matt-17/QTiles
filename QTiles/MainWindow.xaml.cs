@@ -17,10 +17,10 @@ using Mapsui.Tiling.Layers;
 using QTiles.Core.Config;
 using QTiles.Core.Geo;
 using QTiles.Core.Transforms;
-using QTiles.Editor.Wpf.Services;
-using QTiles.Editor.Wpf.ViewModels;
+using QTiles.Services;
+using QTiles.ViewModels;
 
-namespace QTiles.Editor.Wpf;
+namespace QTiles;
 
 public partial class MainWindow : Window
 {
@@ -1049,11 +1049,11 @@ public partial class MainWindow : Window
         {
             map.Layers.Add(viewModel.UseSatelliteMap
                 ? new TileLayer(KnownTileSources.Create(KnownTileSource.BingAerial)) { Name = "Satellite" }
-                : OpenStreetMap.CreateTileLayer("QTiles.Editor"));
+                : OpenStreetMap.CreateTileLayer("QTiles"));
         }
         catch
         {
-            map.Layers.Add(OpenStreetMap.CreateTileLayer("QTiles.Editor"));
+            map.Layers.Add(OpenStreetMap.CreateTileLayer("QTiles"));
         }
     }
 

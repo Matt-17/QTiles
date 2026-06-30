@@ -5,7 +5,7 @@ using QTiles.Core.Rendering;
 using QTiles.Core.Transforms;
 using NetVips;
 
-namespace QTiles.Core.Tests;
+namespace QTiles.Tests;
 
 public sealed class GeoTests
 {

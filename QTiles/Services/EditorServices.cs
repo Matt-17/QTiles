@@ -1,7 +1,7 @@
 using QTiles.Core.Config;
 using QTiles.Core.Rendering;
 
-namespace QTiles.Editor.Wpf.Services;
+namespace QTiles.Services;
 
 public sealed class EditorProjectService
 {
