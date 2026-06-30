@@ -94,7 +94,7 @@ jobs:
         id: collect_msi
         shell: pwsh
         run: |
-          $msi = "QTiles.Installer/bin/x64/Release/QTiles-${{ steps.resolve_version.outputs.version }}-x64.msi"
+          $msi = "artifact/release/QTiles-${{ steps.resolve_version.outputs.version }}-x64.msi"
           if (-not (Test-Path $msi)) {
             throw "Missing MSI at $msi"
           }

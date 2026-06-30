@@ -6,6 +6,8 @@
     <Platform>x64</Platform>
     <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0</ProductVersion>
     <PublishDir>$(MSBuildThisFileDirectory)..\artifacts\publish\QTiles\$(Configuration)\win-x64\</PublishDir>
+    <ReleaseArtifactDir>$(MSBuildThisFileDirectory)..\artifact\release\</ReleaseArtifactDir>
+    <OutputPath>$(ReleaseArtifactDir)</OutputPath>
     <DefineConstants>PublishDir=$(PublishDir);ProductVersion=$(ProductVersion)</DefineConstants>
   </PropertyGroup>
 

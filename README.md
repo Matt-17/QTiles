@@ -182,7 +182,7 @@ Build the MSI:
 dotnet build .\QTiles.Installer\QTiles.Installer.wixproj --configuration Release -p:ProductVersion=1.0.0
 ```
 
-The installer build publishes both `QTiles.exe` and `QTiles.Cli.exe` as self-contained `win-x64` single-file executables before packaging.
+The installer build publishes both `QTiles.exe` and `QTiles.Cli.exe` as self-contained `win-x64` single-file executables before packaging, then writes the release MSI to `artifact\release\QTiles-X.Y.Z-x64.msi`.
 
 ## Repository Layout
 

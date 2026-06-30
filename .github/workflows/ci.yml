@@ -82,4 +82,4 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: QTiles-installer
-          path: QTiles.Installer/bin/x64/Release/QTiles-*.msi
+          path: artifact/release/QTiles-*.msi
