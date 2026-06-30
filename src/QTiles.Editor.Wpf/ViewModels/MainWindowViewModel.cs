@@ -23,6 +23,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string status = "Ready";
     private string editorMode = "Select";
     private string solveState = "Unsolved";
+    private string solveFeedbackText = "Add control points to solve the transform.";
+    private string solveFeedbackBrush = "#AAB3C1";
     private string rmsText = "n/a";
     private string maxErrorText = "n/a";
     private double renderPercent;
@@ -39,10 +41,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool suppressDirtyTracking;
     private bool useSatelliteMap;
     private bool isPreviewEnabled;
+    private bool isViewSyncEnabled = true;
     private string renderSummaryText = "No render yet";
     private CancellationTokenSource? renderCancellation;
     private readonly RelayCommand cancelRenderCommand;
     private readonly Dictionary<ControlPointViewModel, PropertyChangedEventHandler> pointHandlers = [];
+    private const double ReviewErrorPixels = 2.0;
+    private const double HighErrorPixels = 8.0;
+    private const string SolveGoodBrush = "#3BAA8D";
+    private const string SolveReviewBrush = "#E0AD44";
+    private const string SolveErrorBrush = "#EF6461";
+    private const string SolveNeutralBrush = "#AAB3C1";
     private const string ProjectFilter = "QTiles project or image (*.yaml;*.yml;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp)|*.yaml;*.yml;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp|QTiles YAML (*.yaml;*.yml)|*.yaml;*.yml|Image files (*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp)|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp|All files (*.*)|*.*";
     private const string ImageFilter = "Image files (*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp)|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.webp|All files (*.*)|*.*";
 
@@ -51,6 +60,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OpenCommand = new AsyncCommand(OpenAsync);
         SaveCommand = new AsyncCommand(SaveAsync);
         ChooseSourceImageCommand = new RelayCommand(ChooseSourceImage);
+        ChooseOutputDirectoryCommand = new RelayCommand(ChooseOutputDirectory);
         ValidateCommand = new RelayCommand(Validate);
         SolveCommand = new RelayCommand(Solve);
         RenderCommand = new AsyncCommand(RenderAsync);
@@ -104,6 +114,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public ICommand OpenCommand { get; }
     public ICommand SaveCommand { get; }
     public ICommand ChooseSourceImageCommand { get; }
+    public ICommand ChooseOutputDirectoryCommand { get; }
     public ICommand ValidateCommand { get; }
     public ICommand SolveCommand { get; }
     public ICommand RenderCommand { get; }
@@ -160,6 +171,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
             project.Project.Name = value;
             MarkDirty();
+            OnPropertyChanged();
+        }
+    }
+
+    public bool IsViewSyncEnabled
+    {
+        get => isViewSyncEnabled;
+        set
+        {
+            isViewSyncEnabled = value;
             OnPropertyChanged();
         }
     }
@@ -323,7 +344,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             isRendering = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(IsNotRendering));
             cancelRenderCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool IsNotRendering => !isRendering;
+
+    public string SolveFeedbackText
+    {
+        get => solveFeedbackText;
+        set
+        {
+            solveFeedbackText = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string SolveFeedbackBrush
+    {
+        get => solveFeedbackBrush;
+        set
+        {
+            solveFeedbackBrush = value;
+            OnPropertyChanged();
         }
     }
 
@@ -469,6 +513,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         ValidateAndSolve();
     }
 
+    public void SetPointLocked(ControlPointViewModel point, bool locked)
+    {
+        point.IsLocked = locked;
+        SelectedPoint = point;
+        Status = locked ? $"Locked point {point.Id}" : $"Unlocked point {point.Id}";
+    }
+
     private async Task OpenAsync()
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
@@ -552,6 +603,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    private void ChooseOutputDirectory()
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Choose output directory"
+        };
+
+        var currentPath = ResolveOutputDirectory();
+        if (Directory.Exists(currentPath))
+        {
+            dialog.InitialDirectory = currentPath;
+        }
+
+        if (dialog.ShowDialog() == true)
+        {
+            OutputDirectory = CreateProjectPathForOutputDirectory(dialog.FolderName);
+            Validate();
+            if (CanAttemptSolve())
+            {
+                Solve();
+            }
+
+            Status = $"Output directory set: {OutputDirectory}";
+        }
+    }
+
     private void Validate()
     {
         SyncToProject();
@@ -560,7 +637,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         var errors = messages.Count(m => m.Severity == ValidationSeverity.Error);
         var warnings = messages.Count(m => m.Severity == ValidationSeverity.Warning);
         Status = errors == 0 ? $"Valid with {warnings} warning(s)" : $"{errors} error(s), {warnings} warning(s)";
-        SolveState = errors == 0 ? "Ready to solve" : "Validation errors";
+        SetSolveFeedback(
+            errors == 0 ? "Ready to solve" : "Validation errors",
+            errors == 0
+                ? "Validation is clear. Solve feedback will show residual detail here."
+                : "Fix validation errors before solving.",
+            errors == 0 ? SolveGoodBrush : SolveErrorBrush);
     }
 
     private void Solve()
@@ -583,17 +665,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             CanRender = result.TransformType == "affine" && project.Georeference.ControlPoints.Count(p => p.Enabled) >= 3;
             RmsText = $"{result.RmsPixelsAtMaxZoom:0.##} px";
             MaxErrorText = $"{result.MaxPixelsAtMaxZoom:0.##} px";
-            SolveState = result.TransformType == "similarity" ? "2-point similarity preview" : "Affine solved";
-            var zoomText = useAutoZoomRange ? $", zoom {zoomRange.MinZoom}..{zoomRange.MaxZoom}" : "";
+            UpdateSolveFeedback(result, zoomRange);
+            var zoomText = useAutoZoomRange ? $" zoom {zoomRange.MinZoom}..{zoomRange.MaxZoom}" : "";
             Status = result.TransformType == "similarity"
                 ? $"2-point similarity preview{zoomText}"
-                : $"Affine solved{zoomText}, RMS {result.RmsPixelsAtMaxZoom:0.##} px, max {result.MaxPixelsAtMaxZoom:0.##} px";
+                : $"{SolveState}{zoomText}, RMS {result.RmsPixelsAtMaxZoom:0.##} px, max {result.MaxPixelsAtMaxZoom:0.##} px";
         }
         catch (Exception ex)
         {
             CurrentSolveResult = null;
             CanRender = false;
-            SolveState = "Unsolved";
+            ClearErrors();
+            SetSolveFeedback("Unsolved", ex.Message, SolveErrorBrush);
             RmsText = "n/a";
             MaxErrorText = "n/a";
             Status = ex.Message;
@@ -730,17 +813,87 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private void ApplyErrors(TransformSolveResult result)
     {
         isApplyingErrors = true;
-        foreach (var error in result.Errors)
+        try
         {
-            var point = ControlPoints.FirstOrDefault(p => p.Id == error.Id.Value);
-            if (point is not null)
+            ClearErrors();
+            foreach (var error in result.Errors)
             {
-                point.ErrorPixels = error.PixelsAtMaxZoom;
-                point.ErrorMeters = error.EstimatedMeters;
+                var point = ControlPoints.FirstOrDefault(p => p.Id == error.Id.Value);
+                if (point is not null)
+                {
+                    point.ErrorPixels = error.PixelsAtMaxZoom;
+                    point.ErrorMeters = error.EstimatedMeters;
+                }
             }
         }
+        finally
+        {
+            isApplyingErrors = false;
+        }
+    }
 
-        isApplyingErrors = false;
+    private void ClearErrors()
+    {
+        foreach (var point in ControlPoints)
+        {
+            point.ErrorPixels = 0;
+            point.ErrorMeters = 0;
+        }
+    }
+
+    private void UpdateSolveFeedback(TransformSolveResult result, ZoomRangeRecommendation zoomRange)
+    {
+        var enabledPointCount = project.Georeference.ControlPoints.Count(p => p.Enabled);
+        var zoomText = useAutoZoomRange ? $" Zoom {zoomRange.MinZoom}..{zoomRange.MaxZoom}." : "";
+        if (result.TransformType == "similarity")
+        {
+            SetSolveFeedback(
+                "2-point similarity preview",
+                $"Two enabled points can align scale and rotation, but affine rendering still needs three enabled points.{zoomText}",
+                SolveReviewBrush);
+            return;
+        }
+
+        var highErrors = result.Errors
+            .Where(error => error.PixelsAtMaxZoom > HighErrorPixels)
+            .OrderByDescending(error => error.PixelsAtMaxZoom)
+            .ToList();
+        if (highErrors.Count > 0)
+        {
+            SetSolveFeedback("Affine needs marker review", FormatResidualIssue(highErrors, "over 8 px", zoomText), SolveErrorBrush);
+            return;
+        }
+
+        var reviewErrors = result.Errors
+            .Where(error => error.PixelsAtMaxZoom > ReviewErrorPixels)
+            .OrderByDescending(error => error.PixelsAtMaxZoom)
+            .ToList();
+        if (reviewErrors.Count > 0)
+        {
+            SetSolveFeedback("Affine solved with residuals", FormatResidualIssue(reviewErrors, "over 2 px", zoomText), SolveReviewBrush);
+            return;
+        }
+
+        SetSolveFeedback(
+            "Affine solved cleanly",
+            $"{enabledPointCount} enabled points, RMS {result.RmsPixelsAtMaxZoom:0.##} px, max {result.MaxPixelsAtMaxZoom:0.##} px.{zoomText}",
+            SolveGoodBrush);
+    }
+
+    private static string FormatResidualIssue(IReadOnlyList<ControlPointError> errors, string thresholdText, string zoomText)
+    {
+        var worst = errors[0];
+        var pointText = errors.Count == 1
+            ? $"Point {worst.Id.Value} is {thresholdText}"
+            : $"{errors.Count} points are {thresholdText}: {string.Join(", ", errors.Take(4).Select(error => error.Id.Value))}";
+        return $"{pointText}; worst is {worst.Id.Value} at {worst.PixelsAtMaxZoom:0.##} px / {worst.EstimatedMeters:0.##} m. Check that marker's image and world positions match.{zoomText}";
+    }
+
+    private void SetSolveFeedback(string state, string feedback, string brush)
+    {
+        SolveState = state;
+        SolveFeedbackText = feedback;
+        SolveFeedbackBrush = brush;
     }
 
     private ControlPointViewModel CreatePoint()
@@ -787,12 +940,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         PropertyChangedEventHandler handler = (_, e) =>
         {
-            if (isApplyingErrors || e.PropertyName is nameof(ControlPointViewModel.ErrorPixels) or nameof(ControlPointViewModel.ErrorMeters))
+            if (isApplyingErrors
+                || e.PropertyName is nameof(ControlPointViewModel.ErrorPixels)
+                    or nameof(ControlPointViewModel.ErrorMeters))
             {
                 return;
             }
 
             MarkDirty();
+            if (e.PropertyName is nameof(ControlPointViewModel.IsLocked))
+            {
+                return;
+            }
+
             ValidateAndSolve();
         };
 
@@ -844,7 +1004,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         else
         {
             CanRender = false;
-            SolveState = "Add control points";
+            SetSolveFeedback("Add control points", "Pair enough image and world markers to solve the transform.", SolveNeutralBrush);
         }
 
         Status = $"Source image set: {Path.GetFileName(imagePath)}";
@@ -858,21 +1018,27 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     }
 
     private string CreateProjectPathForSourceImage(string imagePath)
+        => CreateProjectPathForProject(imagePath);
+
+    private string CreateProjectPathForOutputDirectory(string directoryPath)
+        => CreateProjectPathForProject(directoryPath);
+
+    private string CreateProjectPathForProject(string path)
     {
         var directory = ProjectDirectory;
         if (string.IsNullOrWhiteSpace(directory))
         {
-            return imagePath;
+            return path;
         }
 
         try
         {
-            var relative = Path.GetRelativePath(directory, imagePath);
+            var relative = Path.GetRelativePath(directory, path);
             return NormalizeProjectPath(relative);
         }
         catch
         {
-            return imagePath;
+            return path;
         }
     }
 

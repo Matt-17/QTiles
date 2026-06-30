@@ -23,6 +23,7 @@
         <SolidColorBrush x:Key="MarkerWarning" Color="#E0AD44" />
         <SolidColorBrush x:Key="MarkerError" Color="#EF6461" />
         <SolidColorBrush x:Key="MarkerDisabled" Color="#696969" />
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
 
         <Style TargetType="Button">
             <Setter Property="Background" Value="#303640" />
@@ -121,6 +122,44 @@
                                 <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#3A414B" />
                                 <Setter Property="Foreground" Value="#7D8794" />
                                 <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="GridIconToggleButton" TargetType="ToggleButton">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ToggleButton}">
+                        <Border x:Name="ToggleBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ToggleBorder" Property="Background" Value="#29313A" />
+                                <Setter TargetName="ToggleBorder" Property="BorderBrush" Value="#4B5664" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="ToggleBorder" Property="Background" Value="#22342F" />
+                                <Setter TargetName="ToggleBorder" Property="BorderBrush" Value="#3BAA8D" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ToggleBorder" Property="Background" Value="#18201F" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -297,8 +336,15 @@
             <Setter Property="Foreground" Value="{StaticResource TextMuted}" />
             <Setter Property="BorderBrush" Value="#343B45" />
             <Setter Property="BorderThickness" Value="0,0,1,1" />
-            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="Padding" Value="10,5" />
             <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="GridIconHeader" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
         </Style>
 
         <Style TargetType="DataGridRow">
@@ -306,6 +352,7 @@
             <Setter Property="Foreground" Value="{StaticResource TextStrong}" />
             <Setter Property="BorderBrush" Value="#343B45" />
             <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <EventSetter Event="PreviewMouseRightButtonDown" Handler="ControlPointRow_PreviewMouseRightButtonDown" />
             <Style.Triggers>
                 <Trigger Property="IsSelected" Value="True">
                     <Setter Property="Background" Value="#234A43" />
@@ -328,11 +375,13 @@
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 Padding="{TemplateBinding Padding}">
-                            <ContentPresenter VerticalAlignment="Center" />
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" />
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Style.Triggers>
                 <Trigger Property="IsSelected" Value="True">
                     <Setter Property="Background" Value="#2B705F" />
@@ -340,6 +389,11 @@
                     <Setter Property="BorderBrush" Value="#3BAA8D" />
                 </Trigger>
             </Style.Triggers>
+        </Style>
+
+        <Style x:Key="GridIconCell" TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
         </Style>
 
         <Style TargetType="CheckBox">
@@ -374,6 +428,25 @@
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
+        <Style x:Key="ButtonIcon" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="0,0,7,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="CompactButtonIcon" TargetType="TextBlock" BasedOn="{StaticResource ButtonIcon}">
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="GridIconGlyph" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
         <Style x:Key="GridText" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="Padding" Value="0" />
@@ -381,7 +454,9 @@
 
         <Style x:Key="GridTextEdit" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="Padding" Value="2,0" />
+            <Setter Property="Margin" Value="-6,0" />
+            <Setter Property="MinHeight" Value="0" />
             <Setter Property="BorderThickness" Value="0" />
         </Style>
     </Window.Resources>
@@ -392,31 +467,28 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="QTiles" Foreground="{StaticResource TextStrong}" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,18,0" />
-                    <Button Content="Open..." Command="{Binding OpenCommand}" ToolTip="Open a QTiles YAML project or choose a source image" />
-                    <Button Content="Save" Command="{Binding SaveCommand}" />
-                    <Button Content="Image..." Command="{Binding ChooseSourceImageCommand}" ToolTip="Choose the source image for this project" />
-                    <Button Content="Validate" Command="{Binding ValidateCommand}" />
-                    <Button Content="Solve" Command="{Binding SolveCommand}" />
-                    <Button Content="Render" Command="{Binding RenderCommand}" Style="{StaticResource RenderButton}" IsEnabled="{Binding CanRender}" />
-                    <ToggleButton Content="Preview" IsChecked="{Binding IsPreviewEnabled}" Style="{StaticResource PreviewToggleButton}" />
-                    <Button Content="Cancel render" Command="{Binding CancelRenderCommand}" IsEnabled="{Binding IsRendering}" ToolTip="Stops the active render job" />
-                    <Button Content="Output" Command="{Binding OpenOutputCommand}" />
-                    <ComboBox ItemsSource="{Binding EditorModes}"
-                              SelectedItem="{Binding EditorMode}"
-                              Width="170"
-                              Margin="12,0,0,0"
-                              VerticalAlignment="Center"
-                              Background="#15191F"
-                              Foreground="{StaticResource TextStrong}"
-                              IsReadOnly="True" />
-                </StackPanel>
-
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Command="{Binding OpenCommand}" ToolTip="Open a QTiles YAML project or choose a source image">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE8E5;" Style="{StaticResource ButtonIcon}" />
+                            <TextBlock Text="Open..." />
+                        </StackPanel>
+                    </Button>
+                    <Button Command="{Binding SaveCommand}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE74E;" Style="{StaticResource ButtonIcon}" />
+                            <TextBlock Text="Save" />
+                        </StackPanel>
+                    </Button>
+                    <Button Command="{Binding ChooseSourceImageCommand}" ToolTip="Choose the source image for this project">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xEB9F;" Style="{StaticResource ButtonIcon}" />
+                            <TextBlock Text="Image..." />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -466,11 +538,7 @@
                             <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal">
                                 <CheckBox Content="Satellite"
                                           IsChecked="{Binding UseSatelliteMap}"
-                                          VerticalAlignment="Center"
-                                          Margin="0,0,10,0" />
-                                <Border Background="#173E36" BorderBrush="#2D8B76" BorderThickness="1" Padding="8,4">
-                                    <TextBlock Text="{Binding SolveState}" Foreground="#B9F2E2" FontSize="12" FontWeight="SemiBold" />
-                                </Border>
+                                          VerticalAlignment="Center" />
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -502,15 +570,20 @@
                     </Grid.RowDefinitions>
                     <Border Background="{StaticResource SurfaceRaised}" BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,0,0,1" Padding="14,8">
                         <Grid>
-                            <StackPanel Margin="0,0,188,0">
+                            <StackPanel Margin="0,0,246,0">
                                 <TextBlock Text="Source image" Style="{StaticResource PaneTitle}" />
                                 <TextBlock Text="{Binding SourceImage}" Style="{StaticResource PaneCaption}" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <Button Content="Fit" Style="{StaticResource CompactButton}" Click="ImageFit_Click" />
-                                <Button Content="-" Style="{StaticResource CompactButton}" Click="ImageZoomOut_Click" />
-                                <Button Content="+" Style="{StaticResource CompactButton}" Click="ImageZoomIn_Click" />
-                                <Button Content="Rotate" Style="{StaticResource CompactButton}" Click="ImageRotate_Click" />
+                                <CheckBox Content="Sync"
+                                          IsChecked="{Binding IsViewSyncEnabled}"
+                                          ToolTip="Keep the source image and world map viewports synced"
+                                          Margin="0,0,10,0" />
+                                <Button Style="{StaticResource CompactButton}" Click="ImageFit_Click" ToolTip="Fit image">
+                                    <TextBlock Text="&#xE9A6;" Style="{StaticResource CompactButtonIcon}" />
+                                </Button>
+                                <Button Content="-" Style="{StaticResource CompactButton}" Click="ImageZoomOut_Click" ToolTip="Zoom out" />
+                                <Button Content="+" Style="{StaticResource CompactButton}" Click="ImageZoomIn_Click" ToolTip="Zoom in" />
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -540,7 +613,6 @@
                             <Border.RenderTransform>
                                 <TransformGroup>
                                     <ScaleTransform x:Name="ImageScaleTransform" ScaleX="1" ScaleY="1" />
-                                    <RotateTransform x:Name="ImageRotateTransform" Angle="0" />
                                     <TranslateTransform x:Name="ImageTranslateTransform" X="0" Y="0" />
                                 </TransformGroup>
                             </Border.RenderTransform>
@@ -597,7 +669,19 @@
                         </Grid>
 
                         <TextBlock Text="Output directory" Style="{StaticResource FieldLabel}" />
-                        <TextBox Text="{Binding OutputDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding OutputDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button Grid.Column="2"
+                                    Content="Browse"
+                                    Command="{Binding ChooseOutputDirectoryCommand}"
+                                    MinWidth="74"
+                                    Margin="0" />
+                        </Grid>
 
                         <Grid Margin="0,10,0,0">
                             <Grid.ColumnDefinitions>
@@ -643,18 +727,11 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,18,0,0" Padding="12">
-                            <StackPanel>
-                                <TextBlock Text="Validation / solve" Foreground="{StaticResource TextStrong}" FontWeight="SemiBold" />
-                                <TextBlock Text="{Binding SolveState}" Foreground="{StaticResource Accent}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                                <TextBlock Text="{Binding Status}" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                            </StackPanel>
-                        </Border>
-
-                        <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,12,0,0" Padding="12">
+                        <Border Background="#171A1F" BorderBrush="{Binding SolveFeedbackBrush}" BorderThickness="1" Margin="0,18,0,0" Padding="12">
                             <StackPanel>
                                 <TextBlock Text="Solve feedback" Foreground="{StaticResource TextStrong}" FontWeight="SemiBold" />
-                                <TextBlock Text="{Binding SolveState}" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                <TextBlock Text="{Binding SolveState}" Foreground="{Binding SolveFeedbackBrush}" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                <TextBlock Text="{Binding SolveFeedbackText}" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,4,0,0" />
                                 <Grid Margin="0,12,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -677,6 +754,48 @@
                                 <TextBlock Text="Render" Foreground="{StaticResource TextStrong}" FontWeight="SemiBold" />
                                 <TextBlock Text="{Binding RenderSummaryText}" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0" />
                                 <ProgressBar Value="{Binding RenderPercent}" Minimum="0" Maximum="100" Height="8" Margin="0,12,0,0" Foreground="{StaticResource Accent}" />
+                                <WrapPanel Margin="0,12,0,0">
+                                    <Button Command="{Binding RenderCommand}"
+                                            Style="{StaticResource RenderButton}"
+                                            IsEnabled="{Binding CanRender}"
+                                            Visibility="{Binding IsNotRendering, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                            MinWidth="78"
+                                            Margin="0,0,6,6">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE768;" Style="{StaticResource ButtonIcon}" />
+                                            <TextBlock Text="Render" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Command="{Binding CancelRenderCommand}"
+                                            Visibility="{Binding IsRendering, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                            ToolTip="Stops the active render job"
+                                            MinWidth="78"
+                                            Margin="0,0,6,6"
+                                            Background="#3A2830"
+                                            BorderBrush="#70424D">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE711;" Style="{StaticResource ButtonIcon}" />
+                                            <TextBlock Text="Cancel" />
+                                        </StackPanel>
+                                    </Button>
+                                    <ToggleButton IsChecked="{Binding IsPreviewEnabled}"
+                                                  Style="{StaticResource PreviewToggleButton}"
+                                                  MinWidth="78"
+                                                  Margin="0,0,6,6">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE890;" Style="{StaticResource ButtonIcon}" />
+                                            <TextBlock Text="Preview" />
+                                        </StackPanel>
+                                    </ToggleButton>
+                                    <Button Command="{Binding OpenOutputCommand}"
+                                            MinWidth="78"
+                                            Margin="0,0,0,6">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE838;" Style="{StaticResource ButtonIcon}" />
+                                            <TextBlock Text="Output" />
+                                        </StackPanel>
+                                    </Button>
+                                </WrapPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -697,8 +816,18 @@
                                            Style="{StaticResource PaneCaption}"
                                            VerticalAlignment="Center"
                                            Margin="0,0,12,0" />
-                                <Button Content="Zoom point" Style="{StaticResource CompactButton}" Click="ZoomSelectedPoint_Click" />
-                                <Button Content="Delete" Style="{StaticResource CompactButton}" Command="{Binding DeletePointCommand}" Background="#3A2830" BorderBrush="#70424D" />
+                                <Button Style="{StaticResource CompactButton}" Click="CenterSelectedPoint_Click">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8A3;" Style="{StaticResource ButtonIcon}" />
+                                        <TextBlock Text="Center point" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource CompactButton}" Command="{Binding DeletePointCommand}" Background="#3A2830" BorderBrush="#70424D">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE74D;" Style="{StaticResource ButtonIcon}" />
+                                        <TextBlock Text="Delete" />
+                                    </StackPanel>
+                                </Button>
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -711,15 +840,72 @@
                               BorderThickness="0"
                               GridLinesVisibility="Horizontal">
                         <DataGrid.Columns>
-                            <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="80" />
-                            <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="72" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
+                            <DataGridTemplateColumn Width="42" IsReadOnly="False" CellStyle="{StaticResource GridIconCell}" HeaderStyle="{StaticResource GridIconHeader}">
+                                <DataGridTemplateColumn.Header>
+                                    <TextBlock Text="&#xE8FB;"
+                                               Style="{StaticResource GridIconGlyph}"
+                                               ToolTip="Enabled" />
+                                </DataGridTemplateColumn.Header>
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ToggleButton Style="{StaticResource GridIconToggleButton}"
+                                                      IsChecked="{Binding Enabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      ToolTip="Enabled">
+                                            <TextBlock>
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource GridIconGlyph}">
+                                                        <Setter Property="Text" Value="&#xE8FB;" />
+                                                        <Setter Property="Foreground" Value="{StaticResource Accent}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Enabled}" Value="False">
+                                                                <Setter Property="Text" Value="&#xE711;" />
+                                                                <Setter Property="Foreground" Value="{StaticResource TextMuted}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </ToggleButton>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Width="42" IsReadOnly="False" CellStyle="{StaticResource GridIconCell}" HeaderStyle="{StaticResource GridIconHeader}">
+                                <DataGridTemplateColumn.Header>
+                                    <TextBlock Text="&#xE72E;"
+                                               Style="{StaticResource GridIconGlyph}"
+                                               ToolTip="Locked" />
+                                </DataGridTemplateColumn.Header>
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ToggleButton Style="{StaticResource GridIconToggleButton}"
+                                                      IsChecked="{Binding IsLocked, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      ToolTip="Locked">
+                                            <TextBlock>
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource GridIconGlyph}">
+                                                        <Setter Property="Text" Value="&#xE785;" />
+                                                        <Setter Property="Foreground" Value="{StaticResource TextMuted}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsLocked}" Value="True">
+                                                                <Setter Property="Text" Value="&#xE72E;" />
+                                                                <Setter Property="Foreground" Value="#F2C66D" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </ToggleButton>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="72" IsReadOnly="True" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
                             <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="150" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
                             <DataGridTextColumn Header="Image X" Binding="{Binding ImageX}" Width="96" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
                             <DataGridTextColumn Header="Image Y" Binding="{Binding ImageY}" Width="96" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
-                            <DataGridTextColumn Header="Longitude" Binding="{Binding Longitude}" Width="118" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
-                            <DataGridTextColumn Header="Latitude" Binding="{Binding Latitude}" Width="118" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
-                            <DataGridTextColumn Header="Error px" Binding="{Binding ErrorPixels, StringFormat=0.##}" Width="92" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
-                            <DataGridTextColumn Header="Error m" Binding="{Binding ErrorMeters, StringFormat=0.##}" Width="92" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
+                            <DataGridTextColumn Header="Longitude" Binding="{Binding Longitude}" Width="142" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
+                            <DataGridTextColumn Header="Latitude" Binding="{Binding Latitude}" Width="142" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
+                            <DataGridTextColumn Header="Error px" Binding="{Binding ErrorPixels, StringFormat=0.##}" Width="92" IsReadOnly="True" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
+                            <DataGridTextColumn Header="Error m" Binding="{Binding ErrorMeters, StringFormat=0.##}" Width="92" IsReadOnly="True" ElementStyle="{StaticResource GridText}" EditingElementStyle="{StaticResource GridTextEdit}" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>

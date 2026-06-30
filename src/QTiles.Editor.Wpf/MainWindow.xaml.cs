@@ -16,6 +16,7 @@ using Mapsui.Tiling;
 using Mapsui.Tiling.Layers;
 using QTiles.Core.Config;
 using QTiles.Core.Geo;
+using QTiles.Core.Transforms;
 using QTiles.Editor.Wpf.Services;
 using QTiles.Editor.Wpf.ViewModels;
 
@@ -26,13 +27,17 @@ public partial class MainWindow : Window
     private readonly MainWindowViewModel viewModel = new();
     private readonly EditorSettingsService settingsService = new();
     private readonly Dictionary<ControlPointViewModel, PropertyChangedEventHandler> pointHandlers = [];
+    private readonly Dictionary<ControlPointViewModel, Grid> worldMarkers = [];
+    private readonly Dictionary<ControlPointViewModel, Grid> imageMarkers = [];
+    private readonly Dictionary<string, Image> previewTileImages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, PreviewBitmapCacheEntry> previewBitmapCache = new(StringComparer.OrdinalIgnoreCase);
     private EditorSettings editorSettings = new();
+    private Polygon? imageFootprintPolygon;
     private ControlPointViewModel? draggedPoint;
     private string? draggedPane;
     private int imagePixelWidth;
     private int imagePixelHeight;
     private double imageZoom = 1;
-    private double imageRotation;
     private double imagePanX;
     private double imagePanY;
     private bool isPanningImage;
@@ -45,10 +50,20 @@ public partial class MainWindow : Window
     private bool previewMissingStatusShown;
     private bool startupProjectLoaded;
     private bool initialWorldViewApplied;
+    private bool isSyncingImageToWorld;
+    private bool isSyncingWorldToImage;
     private const double WebMercatorHalfWorld = 20037508.342789244;
     private const double WebMercatorWorldWidth = WebMercatorHalfWorld * 2.0;
     private const double MapTileSize = 256.0;
     private const double MinVisibleWindowSize = 96.0;
+    private const double MinImageZoom = 0.05;
+    private const double MaxImageZoom = 64.0;
+
+    private sealed class PreviewBitmapCacheEntry
+    {
+        public long LastWriteTicks { get; init; }
+        public BitmapSource Bitmap { get; init; } = null!;
+    }
 
     public MainWindow()
     {
@@ -74,6 +89,7 @@ public partial class MainWindow : Window
         RefreshSourceImage();
         SubscribePointHandlers();
         ApplyInitialWorldView();
+        SyncImageViewToWorldViewport(redraw: false);
         RedrawMarkers();
     }
 
@@ -93,6 +109,11 @@ public partial class MainWindow : Window
         map.Navigator.ViewportChanged += (_, _) => Dispatcher.BeginInvoke(() =>
         {
             RedrawPreviewOverlay();
+            if (viewModel.IsViewSyncEnabled && !isSyncingWorldToImage)
+            {
+                SyncImageViewToWorldViewport(redraw: false);
+            }
+
             RedrawMarkers();
         });
         WorldMapControl.Map = map;
@@ -245,7 +266,18 @@ public partial class MainWindow : Window
         if (e.PropertyName is nameof(MainWindowViewModel.IsPreviewEnabled))
         {
             previewMissingStatusShown = false;
+            if (!viewModel.IsPreviewEnabled)
+            {
+                ClearPreviewOverlay();
+            }
+
             RedrawPreviewOverlay();
+        }
+
+        if (e.PropertyName is nameof(MainWindowViewModel.IsViewSyncEnabled) && viewModel.IsViewSyncEnabled)
+        {
+            SyncImageViewToWorldViewport(redraw: false);
+            RedrawMarkers();
         }
 
         if (e.PropertyName is nameof(MainWindowViewModel.OutputDirectory)
@@ -253,11 +285,20 @@ public partial class MainWindow : Window
             or nameof(MainWindowViewModel.RenderSummaryText))
         {
             previewMissingStatusShown = false;
+            ClearPreviewOverlay(clearBitmapCache: true);
             RedrawPreviewOverlay();
         }
 
         if (e.PropertyName is nameof(MainWindowViewModel.SelectedPoint) or nameof(MainWindowViewModel.CurrentSolveResult))
         {
+            if (e.PropertyName is nameof(MainWindowViewModel.CurrentSolveResult))
+            {
+                if (viewModel.IsViewSyncEnabled)
+                {
+                    SyncImageViewToWorldViewport(redraw: false);
+                }
+            }
+
             RedrawMarkers();
         }
     }
@@ -329,7 +370,10 @@ public partial class MainWindow : Window
             imagePixelWidth = bitmap.PixelWidth;
             imagePixelHeight = bitmap.PixelHeight;
             UpdateSourceImageElementSize();
-            FitImage();
+            if (!viewModel.IsViewSyncEnabled || !SyncImageViewToWorldViewport())
+            {
+                FitImage();
+            }
         }
         catch
         {
@@ -501,16 +545,20 @@ public partial class MainWindow : Window
         if (sender == ImageOverlay)
         {
             UpdateSourceImageElementSize();
+            if (viewModel.IsViewSyncEnabled)
+            {
+                SyncImageViewToWorldViewport(redraw: false);
+            }
         }
 
         RedrawMarkers();
     }
 
-    private void ZoomSelectedPoint_Click(object sender, RoutedEventArgs e)
+    private void CenterSelectedPoint_Click(object sender, RoutedEventArgs e)
     {
         if (viewModel.SelectedPoint is not null)
         {
-            ZoomToWorldPoint(viewModel.SelectedPoint);
+            CenterWorldOnPoint(viewModel.SelectedPoint);
         }
     }
 
@@ -521,14 +569,24 @@ public partial class MainWindow : Window
             return;
         }
 
-        WorldOverlay.Children.Clear();
-        ImageOverlay.Children.Clear();
-        AddImageFootprint();
+        var visibleWorldMarkers = new HashSet<ControlPointViewModel>();
+        var visibleImageMarkers = new HashSet<ControlPointViewModel>();
+        UpdateImageFootprint();
         foreach (var point in viewModel.ControlPoints)
         {
-            AddWorldMarker(point);
-            AddImageMarker(point);
+            if (AddOrUpdateWorldMarker(point))
+            {
+                visibleWorldMarkers.Add(point);
+            }
+
+            if (AddOrUpdateImageMarker(point))
+            {
+                visibleImageMarkers.Add(point);
+            }
         }
+
+        RemoveStaleMarkers(WorldOverlay, worldMarkers, visibleWorldMarkers);
+        RemoveStaleMarkers(ImageOverlay, imageMarkers, visibleImageMarkers);
     }
 
     private void RedrawPreviewOverlay()
@@ -538,9 +596,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        PreviewOverlay.Children.Clear();
         if (!viewModel.IsPreviewEnabled)
         {
+            ClearPreviewOverlay();
             return;
         }
 
@@ -557,13 +615,15 @@ public partial class MainWindow : Window
 
         var outputDirectory = viewModel.ResolveOutputDirectory();
         var extension = NormalizeExtension(viewModel.Format);
-        if (!Directory.Exists(outputDirectory) || !Directory.EnumerateFiles(outputDirectory, $"*.{extension}", SearchOption.AllDirectories).Any())
+        if (!Directory.Exists(outputDirectory))
         {
+            ClearPreviewOverlay();
             ShowPreviewMissingStatus();
             return;
         }
 
         previewMissingStatusShown = false;
+        var visibleTiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var zoom = ViewportResolutionToZoom(activeViewport.Resolution);
         var tileSize = Math.Max(1, viewModel.TileSize);
         var resolution = WebMercatorWorldWidth / (tileSize * Math.Pow(2.0, zoom));
@@ -581,12 +641,18 @@ public partial class MainWindow : Window
         {
             for (var y = minTileY; y <= maxTileY; y++)
             {
-                AddPreviewTile(outputDirectory, extension, zoom, x, y, tileSize, resolution, activeViewport);
+                AddOrUpdatePreviewTile(outputDirectory, extension, zoom, x, y, tileSize, resolution, activeViewport, visibleTiles);
             }
+        }
+
+        foreach (var key in previewTileImages.Keys.Where(key => !visibleTiles.Contains(key)).ToList())
+        {
+            PreviewOverlay.Children.Remove(previewTileImages[key]);
+            previewTileImages.Remove(key);
         }
     }
 
-    private void AddPreviewTile(
+    private void AddOrUpdatePreviewTile(
         string outputDirectory,
         string extension,
         int zoom,
@@ -594,7 +660,8 @@ public partial class MainWindow : Window
         int y,
         int tileSize,
         double resolution,
-        Viewport viewport)
+        Viewport viewport,
+        HashSet<string> visibleTiles)
     {
         var path = System.IO.Path.Combine(outputDirectory, zoom.ToString(), x.ToString(), $"{y}.{extension}");
         if (!File.Exists(path))
@@ -604,36 +671,75 @@ public partial class MainWindow : Window
 
         try
         {
+            visibleTiles.Add(path);
             var leftWorld = -WebMercatorHalfWorld + x * tileSize * resolution;
             var rightWorld = leftWorld + tileSize * resolution;
             var topWorld = WebMercatorHalfWorld - y * tileSize * resolution;
             var bottomWorld = topWorld - tileSize * resolution;
             var (left, top) = viewport.WorldToScreenXY(leftWorld, topWorld);
             var (right, bottom) = viewport.WorldToScreenXY(rightWorld, bottomWorld);
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            bitmap.UriSource = new System.Uri(path, UriKind.Absolute);
-            bitmap.EndInit();
-            bitmap.Freeze();
-
-            var image = new Image
+            if (!previewTileImages.TryGetValue(path, out var image))
             {
-                Source = bitmap,
-                Width = Math.Abs(right - left),
-                Height = Math.Abs(bottom - top),
-                Opacity = Math.Clamp(viewModel.PreviewOpacity, 0, 1),
-                Stretch = Stretch.Fill,
-                IsHitTestVisible = false
-            };
+                image = new Image
+                {
+                    Source = LoadPreviewBitmap(path),
+                    Stretch = Stretch.Fill,
+                    IsHitTestVisible = false,
+                    SnapsToDevicePixels = true
+                };
+                previewTileImages[path] = image;
+                PreviewOverlay.Children.Add(image);
+            }
+
+            var bitmap = LoadPreviewBitmap(path);
+            if (!ReferenceEquals(image.Source, bitmap))
+            {
+                image.Source = bitmap;
+            }
+
+            image.Width = Math.Abs(right - left);
+            image.Height = Math.Abs(bottom - top);
+            image.Opacity = Math.Clamp(viewModel.PreviewOpacity, 0, 1);
             Canvas.SetLeft(image, Math.Min(left, right));
             Canvas.SetTop(image, Math.Min(top, bottom));
-            PreviewOverlay.Children.Add(image);
         }
         catch
         {
             // Ignore corrupt or unsupported tile images so the editor remains usable.
+            visibleTiles.Remove(path);
+            if (previewTileImages.Remove(path, out var image))
+            {
+                PreviewOverlay.Children.Remove(image);
+            }
+        }
+    }
+
+    private BitmapSource LoadPreviewBitmap(string path)
+    {
+        var lastWriteTicks = File.GetLastWriteTimeUtc(path).Ticks;
+        if (previewBitmapCache.TryGetValue(path, out var entry) && entry.LastWriteTicks == lastWriteTicks)
+        {
+            return entry.Bitmap;
+        }
+
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+        bitmap.UriSource = new System.Uri(path, UriKind.Absolute);
+        bitmap.EndInit();
+        bitmap.Freeze();
+        previewBitmapCache[path] = new PreviewBitmapCacheEntry { LastWriteTicks = lastWriteTicks, Bitmap = bitmap };
+        return bitmap;
+    }
+
+    private void ClearPreviewOverlay(bool clearBitmapCache = false)
+    {
+        PreviewOverlay.Children.Clear();
+        previewTileImages.Clear();
+        if (clearBitmapCache)
+        {
+            previewBitmapCache.Clear();
         }
     }
 
@@ -660,11 +766,12 @@ public partial class MainWindow : Window
         viewModel.Status = "No rendered tiles found in output directory";
     }
 
-    private void AddImageFootprint()
+    private void UpdateImageFootprint()
     {
         var result = viewModel.CurrentSolveResult;
         if (result is null || imagePixelWidth <= 0 || imagePixelHeight <= 0 || WorldOverlay.ActualWidth <= 0 || WorldOverlay.ActualHeight <= 0)
         {
+            RemoveImageFootprint();
             return;
         }
 
@@ -683,65 +790,109 @@ public partial class MainWindow : Window
             screenPoints.Add(WorldToScreen(geo.Lon, geo.Lat));
         }
 
-        WorldOverlay.Children.Add(new Polygon
+        if (imageFootprintPolygon is null)
         {
-            Points = screenPoints,
-            Stroke = new SolidColorBrush(Color.FromRgb(59, 170, 141)),
-            Fill = new SolidColorBrush(Color.FromArgb(42, 59, 170, 141)),
-            StrokeThickness = 2,
-            StrokeDashArray = [4, 3],
-            IsHitTestVisible = false
-        });
+            imageFootprintPolygon = new Polygon
+            {
+                Stroke = new SolidColorBrush(Color.FromRgb(59, 170, 141)),
+                Fill = new SolidColorBrush(Color.FromArgb(42, 59, 170, 141)),
+                StrokeThickness = 2,
+                StrokeDashArray = [4, 3],
+                IsHitTestVisible = false
+            };
+            Panel.SetZIndex(imageFootprintPolygon, 0);
+            WorldOverlay.Children.Insert(0, imageFootprintPolygon);
+        }
+
+        imageFootprintPolygon.Points = screenPoints;
     }
 
-    private void AddWorldMarker(ControlPointViewModel point)
+    private void RemoveImageFootprint()
+    {
+        if (imageFootprintPolygon is not null)
+        {
+            WorldOverlay.Children.Remove(imageFootprintPolygon);
+            imageFootprintPolygon = null;
+        }
+    }
+
+    private bool AddOrUpdateWorldMarker(ControlPointViewModel point)
     {
         if (WorldOverlay.ActualWidth <= 0 || WorldOverlay.ActualHeight <= 0)
         {
-            return;
+            return false;
         }
 
         var screen = WorldToScreen(point.Longitude, point.Latitude);
-        AddMarker(WorldOverlay, point, screen.X, screen.Y, "world");
+        AddOrUpdateMarker(WorldOverlay, worldMarkers, point, screen.X, screen.Y, "world");
+        return true;
     }
 
-    private void AddImageMarker(ControlPointViewModel point)
+    private bool AddOrUpdateImageMarker(ControlPointViewModel point)
     {
         if (ImageOverlay.ActualWidth <= 0 || ImageOverlay.ActualHeight <= 0 || imagePixelWidth <= 0 || imagePixelHeight <= 0)
         {
-            return;
+            return false;
         }
 
         var screen = ImageToScreen(point.ImageX, point.ImageY);
-        AddMarker(ImageOverlay, point, screen.X, screen.Y, "image");
+        AddOrUpdateMarker(ImageOverlay, imageMarkers, point, screen.X, screen.Y, "image");
+        return true;
     }
 
-    private void AddMarker(Canvas overlay, ControlPointViewModel point, double x, double y, string pane)
+    private void AddOrUpdateMarker(
+        Canvas overlay,
+        Dictionary<ControlPointViewModel, Grid> markers,
+        ControlPointViewModel point,
+        double x,
+        double y,
+        string pane)
     {
         var selected = ReferenceEquals(point, viewModel.SelectedPoint);
         var size = selected ? 30.0 : 24.0;
         var markerScale = pane == "image" && IsFinitePositive(imageZoom) ? 1.0 / imageZoom : 1.0;
+        if (!markers.TryGetValue(point, out var marker))
+        {
+            marker = CreateMarker(overlay, point, pane);
+            markers[point] = marker;
+            Panel.SetZIndex(marker, 10);
+            overlay.Children.Add(marker);
+        }
+
+        marker.Width = size;
+        marker.Height = size;
+        marker.Opacity = point.Enabled ? 1.0 : 0.4;
+        marker.ToolTip = point.IsLocked ? $"{point.Id} {point.Name} (locked)".Trim() : $"{point.Id} {point.Name}".Trim();
+        marker.Cursor = point.IsLocked ? Cursors.Arrow : Cursors.Hand;
+        marker.RenderTransform = new ScaleTransform(markerScale, markerScale);
+        if (marker.Children[0] is Ellipse ellipse)
+        {
+            ellipse.Fill = MarkerFill(point);
+            ellipse.Stroke = MarkerStroke(point, selected);
+            ellipse.StrokeThickness = selected || point.IsLocked ? 3 : 2;
+        }
+
+        if (marker.Children[1] is TextBlock label)
+        {
+            label.Text = point.Id;
+            label.FontSize = selected ? 12 : 11;
+        }
+
+        Canvas.SetLeft(marker, x - size / 2.0);
+        Canvas.SetTop(marker, y - size / 2.0);
+    }
+
+    private Grid CreateMarker(Canvas overlay, ControlPointViewModel point, string pane)
+    {
         var marker = new Grid
         {
-            Width = size,
-            Height = size,
             Tag = point,
-            ToolTip = $"{point.Id} {point.Name}".Trim(),
-            Cursor = Cursors.Hand,
-            RenderTransform = new ScaleTransform(markerScale, markerScale),
             RenderTransformOrigin = new Point(0.5, 0.5)
         };
-        marker.Children.Add(new Ellipse
-        {
-            Fill = MarkerFill(point),
-            Stroke = selected ? Brushes.White : MarkerStroke(point),
-            StrokeThickness = selected ? 3 : 2
-        });
+        marker.Children.Add(new Ellipse());
         marker.Children.Add(new TextBlock
         {
-            Text = point.Id,
             Foreground = Brushes.White,
-            FontSize = selected ? 12 : 11,
             FontWeight = FontWeights.Bold,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
@@ -756,14 +907,140 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (point.IsLocked)
+            {
+                draggedPoint = null;
+                draggedPane = null;
+                viewModel.Status = $"Point {point.Id} is locked";
+                return;
+            }
+
             draggedPoint = point;
             draggedPane = pane;
             overlay.CaptureMouse();
         };
+        marker.ContextMenu = CreateMarkerContextMenu(point);
+        marker.MouseRightButtonDown += (_, e) =>
+        {
+            e.Handled = true;
+            viewModel.SelectedPoint = point;
+            if (marker.ContextMenu is { } menu)
+            {
+                menu.PlacementTarget = marker;
+                menu.IsOpen = true;
+            }
+        };
+        return marker;
+    }
 
-        Canvas.SetLeft(marker, x - size / 2.0);
-        Canvas.SetTop(marker, y - size / 2.0);
-        overlay.Children.Add(marker);
+    private void ControlPointRow_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not DataGridRow { DataContext: ControlPointViewModel point } row)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        row.Focus();
+        row.IsSelected = true;
+        viewModel.SelectedPoint = point;
+
+        var menu = CreateMarkerContextMenu(point);
+        menu.PlacementTarget = row;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+        menu.IsOpen = true;
+    }
+
+    private static void RemoveStaleMarkers(
+        Canvas overlay,
+        Dictionary<ControlPointViewModel, Grid> markers,
+        HashSet<ControlPointViewModel> visibleMarkers)
+    {
+        foreach (var point in markers.Keys.Where(point => !visibleMarkers.Contains(point)).ToList())
+        {
+            overlay.Children.Remove(markers[point]);
+            markers.Remove(point);
+        }
+    }
+
+    private ContextMenu CreateMarkerContextMenu(ControlPointViewModel point)
+    {
+        var menu = new ContextMenu();
+        var enabledItem = CreateMarkerMenuItem("", "");
+        UpdateEnabledMenuItem(enabledItem, point);
+        menu.Opened += (_, _) => UpdateEnabledMenuItem(enabledItem, point);
+        enabledItem.Click += (_, _) =>
+        {
+            point.Enabled = !point.Enabled;
+            viewModel.SelectedPoint = point;
+            viewModel.Status = point.Enabled ? $"Enabled point {point.Id}" : $"Disabled point {point.Id}";
+            RedrawMarkers();
+        };
+
+        var lockItem = CreateMarkerMenuItem("", "");
+        UpdateLockMenuItem(lockItem, point);
+        menu.Opened += (_, _) => UpdateLockMenuItem(lockItem, point);
+        lockItem.Click += (_, _) =>
+        {
+            viewModel.SetPointLocked(point, !point.IsLocked);
+            RedrawMarkers();
+        };
+
+        var centerItem = CreateMarkerMenuItem("Center marker", "\uE8A3");
+        centerItem.Click += (_, _) =>
+        {
+            viewModel.SelectedPoint = point;
+            CenterWorldOnPoint(point);
+            RedrawMarkers();
+        };
+
+        var deleteItem = CreateMarkerMenuItem("Delete marker", "\uE74D");
+        deleteItem.Click += (_, _) =>
+        {
+            viewModel.DeletePoint(point);
+            RedrawMarkers();
+        };
+
+        menu.Items.Add(enabledItem);
+        menu.Items.Add(lockItem);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(centerItem);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(deleteItem);
+        return menu;
+    }
+
+    private static void UpdateEnabledMenuItem(MenuItem enabledItem, ControlPointViewModel point)
+    {
+        enabledItem.Header = point.Enabled ? "Disable marker" : "Enable marker";
+        if (enabledItem.Icon is TextBlock icon)
+        {
+            icon.Text = point.Enabled ? "\uE711" : "\uE8FB";
+        }
+    }
+
+    private static void UpdateLockMenuItem(MenuItem lockItem, ControlPointViewModel point)
+    {
+        lockItem.Header = point.IsLocked ? "Unlock marker" : "Lock marker";
+        if (lockItem.Icon is TextBlock icon)
+        {
+            icon.Text = point.IsLocked ? "\uE785" : "\uE72E";
+        }
+    }
+
+    private static MenuItem CreateMarkerMenuItem(string header, string icon)
+    {
+        return new MenuItem
+        {
+            Header = header,
+            Icon = new TextBlock
+            {
+                Text = icon,
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
     }
 
     private void AddBaseMapLayer(Mapsui.Map map)
@@ -808,8 +1085,15 @@ public partial class MainWindow : Window
         };
     }
 
-    private static Brush MarkerStroke(ControlPointViewModel point) =>
-        point.Enabled ? Brushes.White : Brushes.Gray;
+    private static Brush MarkerStroke(ControlPointViewModel point, bool selected)
+    {
+        if (point.IsLocked)
+        {
+            return new SolidColorBrush(Color.FromRgb(19, 24, 33));
+        }
+
+        return selected || point.Enabled ? Brushes.White : Brushes.Gray;
+    }
 
     private Point WorldToScreen(double lon, double lat)
     {
@@ -839,6 +1123,14 @@ public partial class MainWindow : Window
 
     private Point ScreenToImage(Point point)
     {
+        var image = ScreenToImageUnbounded(point);
+        return new Point(
+            Math.Clamp(image.X, 0, Math.Max(0, imagePixelWidth)),
+            Math.Clamp(image.Y, 0, Math.Max(0, imagePixelHeight)));
+    }
+
+    private Point ScreenToImageUnbounded(Point point)
+    {
         var rect = GetImageDisplayRect();
         if (rect.IsEmpty)
         {
@@ -847,9 +1139,7 @@ public partial class MainWindow : Window
 
         var x = rect.Width <= 0 ? 0 : (point.X - rect.X) / rect.Width * imagePixelWidth;
         var y = rect.Height <= 0 ? 0 : (point.Y - rect.Y) / rect.Height * imagePixelHeight;
-        return new Point(
-            Math.Clamp(x, 0, Math.Max(0, imagePixelWidth)),
-            Math.Clamp(y, 0, Math.Max(0, imagePixelHeight)));
+        return new Point(x, y);
     }
 
     private bool TryScreenToImage(Point point, out Point image)
@@ -877,6 +1167,18 @@ public partial class MainWindow : Window
         return TryImagePanePointToImage(imagePaneCenter, out image);
     }
 
+    private bool TryGetCurrentImageViewCenterUnbounded(out Point image)
+    {
+        image = default;
+        if (ImagePane.ActualWidth <= 0 || ImagePane.ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        var imagePaneCenter = new Point(ImagePane.ActualWidth / 2.0, ImagePane.ActualHeight / 2.0);
+        return TryImagePanePointToImageUnbounded(imagePaneCenter, out image);
+    }
+
     private bool TryImagePanePointToImage(Point imagePanePoint, out Point image)
     {
         image = default;
@@ -884,6 +1186,31 @@ public partial class MainWindow : Window
         {
             var overlayPoint = ImagePane.TransformToDescendant(ImageOverlay).Transform(imagePanePoint);
             return TryScreenToImage(overlayPoint, out image);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private bool TryImagePanePointToImageUnbounded(Point imagePanePoint, out Point image)
+    {
+        image = default;
+        try
+        {
+            var overlayPoint = ImagePane.TransformToDescendant(ImageOverlay).Transform(imagePanePoint);
+            var rect = GetImageDisplayRect();
+            if (rect.IsEmpty)
+            {
+                return false;
+            }
+
+            image = ScreenToImageUnbounded(overlayPoint);
+            return true;
         }
         catch (InvalidOperationException)
         {
@@ -947,6 +1274,313 @@ public partial class MainWindow : Window
             height);
     }
 
+    private bool SyncImageViewToWorldViewport(bool redraw = true)
+    {
+        if (!viewModel.IsViewSyncEnabled
+            || isSyncingImageToWorld
+            || isSyncingWorldToImage
+            || isPanningImage
+            || draggedPane == "image"
+            || imagePixelWidth <= 0
+            || imagePixelHeight <= 0
+            || ImagePane.ActualWidth <= 0
+            || ImagePane.ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        var result = viewModel.CurrentSolveResult;
+        var viewport = WorldMapControl.Map?.Navigator.Viewport;
+        var baseRect = GetImageDisplayRect();
+        if (result is null
+            || !result.TransformType.Equals("affine", StringComparison.OrdinalIgnoreCase)
+            || viewport is not { } activeViewport
+            || !IsFinitePositive(activeViewport.Resolution)
+            || baseRect.IsEmpty)
+        {
+            return false;
+        }
+
+        var normalizedCenter = ScreenPointToNormalizedMercator(
+            activeViewport,
+            new Point(WorldOverlay.ActualWidth / 2.0, WorldOverlay.ActualHeight / 2.0));
+        ImagePoint imageCenter;
+        try
+        {
+            imageCenter = result.Transform.WorldToImage(normalizedCenter);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        if (!IsFinitePoint(imageCenter.X, imageCenter.Y))
+        {
+            return false;
+        }
+
+        double syncedZoom;
+        try
+        {
+            syncedZoom = CalculateSyncedImageZoom(result.Transform, activeViewport, baseRect);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        if (!IsFinitePositive(syncedZoom))
+        {
+            return false;
+        }
+
+        var previousZoom = imageZoom;
+        var previousPanX = imagePanX;
+        var previousPanY = imagePanY;
+        isSyncingImageToWorld = true;
+        try
+        {
+            imageZoom = Math.Clamp(syncedZoom, MinImageZoom, MaxImageZoom);
+            imagePanX = 0;
+            imagePanY = 0;
+            ApplyImageTransform(redraw: false);
+
+            var imageOverlayPoint = ImageToScreen(imageCenter.X, imageCenter.Y);
+            if (!TryImageOverlayPointToImagePane(imageOverlayPoint, out var imagePanePoint))
+            {
+                imageZoom = previousZoom;
+                imagePanX = previousPanX;
+                imagePanY = previousPanY;
+                ApplyImageTransform(redraw: false);
+                return false;
+            }
+
+            imagePanX = ImagePane.ActualWidth / 2.0 - imagePanePoint.X;
+            imagePanY = ImagePane.ActualHeight / 2.0 - imagePanePoint.Y;
+            ApplyImageTransform(redraw);
+            return true;
+        }
+        finally
+        {
+            isSyncingImageToWorld = false;
+        }
+    }
+
+    private double CalculateSyncedImageZoom(
+        IGeoTransform transform,
+        Viewport viewport,
+        Rect baseRect)
+    {
+        var baseDipPerImagePixel = baseRect.Width / imagePixelWidth;
+        if (!IsFinitePositive(baseDipPerImagePixel)
+            || WorldOverlay.ActualWidth <= 0
+            || WorldOverlay.ActualHeight <= 0)
+        {
+            return double.NaN;
+        }
+
+        var center = new Point(WorldOverlay.ActualWidth / 2.0, WorldOverlay.ActualHeight / 2.0);
+        var sampleDistance = CalculateSampleDistance(WorldOverlay.ActualWidth, WorldOverlay.ActualHeight);
+        var right = OffsetWithinBounds(center, sampleDistance, 0, WorldOverlay.ActualWidth, WorldOverlay.ActualHeight);
+        var down = OffsetWithinBounds(center, 0, sampleDistance, WorldOverlay.ActualWidth, WorldOverlay.ActualHeight);
+        var horizontalZoom = CalculateWorldSampleImageZoom(transform, viewport, baseDipPerImagePixel, center, right);
+        var verticalZoom = CalculateWorldSampleImageZoom(transform, viewport, baseDipPerImagePixel, center, down);
+        return AveragePositive(horizontalZoom, verticalZoom);
+    }
+
+    private static double CalculateWorldSampleImageZoom(
+        IGeoTransform transform,
+        Viewport viewport,
+        double baseDipPerImagePixel,
+        Point firstScreen,
+        Point secondScreen)
+    {
+        var screenDistance = Distance(firstScreen, secondScreen);
+        if (!IsFinitePositive(screenDistance) || !IsFinitePositive(baseDipPerImagePixel))
+        {
+            return double.NaN;
+        }
+
+        var firstImage = transform.WorldToImage(ScreenPointToNormalizedMercator(viewport, firstScreen));
+        var secondImage = transform.WorldToImage(ScreenPointToNormalizedMercator(viewport, secondScreen));
+        var imagePixels = Distance(firstImage, secondImage);
+        return IsFinitePositive(imagePixels)
+            ? screenDistance / (imagePixels * baseDipPerImagePixel)
+            : double.NaN;
+    }
+
+    private static NormalizedMercatorPoint ScreenPointToNormalizedMercator(Viewport viewport, Point screen)
+    {
+        var (worldX, worldY) = viewport.ScreenToWorldXY(screen.X, screen.Y);
+        return MercatorMetersToNormalized(worldX, worldY);
+    }
+
+    private bool TryImageOverlayPointToImagePane(Point imageOverlayPoint, out Point imagePanePoint)
+    {
+        imagePanePoint = default;
+        try
+        {
+            imagePanePoint = ImageOverlay.TransformToAncestor(ImagePane).Transform(imageOverlayPoint);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static NormalizedMercatorPoint MercatorMetersToNormalized(double x, double y) =>
+        new((x + WebMercatorHalfWorld) / WebMercatorWorldWidth, (WebMercatorHalfWorld - y) / WebMercatorWorldWidth);
+
+    private static Point NormalizedToMercatorMeters(NormalizedMercatorPoint point) =>
+        new(point.X * WebMercatorWorldWidth - WebMercatorHalfWorld, WebMercatorHalfWorld - point.Y * WebMercatorWorldWidth);
+
+    private static bool IsFinitePoint(double x, double y) => double.IsFinite(x) && double.IsFinite(y);
+
+    private static double Distance(ImagePoint first, ImagePoint second)
+    {
+        var dx = second.X - first.X;
+        var dy = second.Y - first.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    private static double Distance(Point first, Point second)
+    {
+        var dx = second.X - first.X;
+        var dy = second.Y - first.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    private static double CalculateSampleDistance(double width, double height)
+    {
+        var shorterSide = Math.Min(width, height);
+        return IsFinitePositive(shorterSide) ? Math.Max(24.0, shorterSide * 0.25) : double.NaN;
+    }
+
+    private static Point OffsetWithinBounds(Point point, double offsetX, double offsetY, double width, double height)
+    {
+        return new Point(
+            Math.Clamp(point.X + offsetX, 0, Math.Max(0, width)),
+            Math.Clamp(point.Y + offsetY, 0, Math.Max(0, height)));
+    }
+
+    private static double AveragePositive(double first, double second)
+    {
+        var firstValid = IsFinitePositive(first);
+        var secondValid = IsFinitePositive(second);
+        return (firstValid, secondValid) switch
+        {
+            (true, true) => Math.Sqrt(first * second),
+            (true, false) => first,
+            (false, true) => second,
+            _ => double.NaN
+        };
+    }
+
+    private bool SyncWorldViewportToImage(bool syncZoom = true)
+    {
+        if (!viewModel.IsViewSyncEnabled
+            || isSyncingWorldToImage
+            || isSyncingImageToWorld
+            || draggedPane == "world"
+            || ImagePane.ActualWidth <= 0
+            || ImagePane.ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        var map = WorldMapControl.Map;
+        var result = viewModel.CurrentSolveResult;
+        if (map is null || result is null || !TryGetCurrentImageViewCenterUnbounded(out var imageCenter))
+        {
+            return false;
+        }
+
+        NormalizedMercatorPoint normalizedCenter;
+        try
+        {
+            normalizedCenter = result.Transform.ImageToWorld(ToImagePoint(imageCenter));
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        if (!IsFinitePoint(normalizedCenter.X, normalizedCenter.Y))
+        {
+            return false;
+        }
+
+        var mercatorCenter = NormalizedToMercatorMeters(normalizedCenter);
+        if (!IsFinitePoint(mercatorCenter.X, mercatorCenter.Y))
+        {
+            return false;
+        }
+
+        isSyncingWorldToImage = true;
+        try
+        {
+            var center = new MPoint(mercatorCenter.X, mercatorCenter.Y);
+            if (!syncZoom)
+            {
+                map.Navigator.CenterOn(center.X, center.Y, 0, null!);
+                return true;
+            }
+
+            if (!TryCalculateMapResolutionFromImage(result.Transform, out var resolution) || !IsFinitePositive(resolution))
+            {
+                return false;
+            }
+
+            map.Navigator.CenterOnAndZoomTo(center, resolution, 0, null!);
+            return true;
+        }
+        finally
+        {
+            isSyncingWorldToImage = false;
+        }
+    }
+
+    private bool TryCalculateMapResolutionFromImage(IGeoTransform transform, out double resolution)
+    {
+        resolution = double.NaN;
+        var center = new Point(ImagePane.ActualWidth / 2.0, ImagePane.ActualHeight / 2.0);
+        var sampleDistance = CalculateSampleDistance(ImagePane.ActualWidth, ImagePane.ActualHeight);
+        if (!IsFinitePositive(sampleDistance))
+        {
+            return false;
+        }
+
+        var right = OffsetWithinBounds(center, sampleDistance, 0, ImagePane.ActualWidth, ImagePane.ActualHeight);
+        var down = OffsetWithinBounds(center, 0, sampleDistance, ImagePane.ActualWidth, ImagePane.ActualHeight);
+        var horizontalResolution = CalculateImageSampleMapResolution(transform, center, right);
+        var verticalResolution = CalculateImageSampleMapResolution(transform, center, down);
+        resolution = AveragePositive(horizontalResolution, verticalResolution);
+        return IsFinitePositive(resolution);
+    }
+
+    private double CalculateImageSampleMapResolution(IGeoTransform transform, Point firstPanePoint, Point secondPanePoint)
+    {
+        var screenDistance = Distance(firstPanePoint, secondPanePoint);
+        if (!IsFinitePositive(screenDistance)
+            || !TryImagePanePointToImageUnbounded(firstPanePoint, out var firstImage)
+            || !TryImagePanePointToImageUnbounded(secondPanePoint, out var secondImage))
+        {
+            return double.NaN;
+        }
+
+        var firstWorld = NormalizedToMercatorMeters(transform.ImageToWorld(ToImagePoint(firstImage)));
+        var secondWorld = NormalizedToMercatorMeters(transform.ImageToWorld(ToImagePoint(secondImage)));
+        var worldMeters = Distance(firstWorld, secondWorld);
+        return IsFinitePositive(worldMeters) ? worldMeters / screenDistance : double.NaN;
+    }
+
+    private static ImagePoint ToImagePoint(Point point) => new() { X = point.X, Y = point.Y };
+
     private void ImagePane_MouseWheel(object sender, MouseWheelEventArgs e)
     {
         ZoomImage(e.Delta > 0 ? 1.12 : 1.0 / 1.12, e.GetPosition(ImagePane));
@@ -993,7 +1627,7 @@ public partial class MainWindow : Window
         var current = e.GetPosition(ImagePane);
         imagePanX = imagePanOrigin.X + current.X - imagePanStart.X;
         imagePanY = imagePanOrigin.Y + current.Y - imagePanStart.Y;
-        ApplyImageTransform();
+        ApplyImageTransform(syncWorldZoom: false);
     }
 
     private void ImagePane_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -1020,12 +1654,6 @@ public partial class MainWindow : Window
     private void ImageZoomOut_Click(object sender, RoutedEventArgs e) => ZoomImage(1.0 / 1.18);
 
     private void ImageZoomIn_Click(object sender, RoutedEventArgs e) => ZoomImage(1.18);
-
-    private void ImageRotate_Click(object sender, RoutedEventArgs e)
-    {
-        imageRotation = (imageRotation + 90) % 360;
-        ApplyImageTransform();
-    }
 
     private void SourceImageDropTarget_PreviewDragOver(object sender, DragEventArgs e)
     {
@@ -1060,7 +1688,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var nextZoom = Math.Clamp(imageZoom * factor, 0.25, 8);
+        var nextZoom = Math.Clamp(imageZoom * factor, MinImageZoom, MaxImageZoom);
         if (Math.Abs(nextZoom - imageZoom) < 0.000001)
         {
             return;
@@ -1123,22 +1751,21 @@ public partial class MainWindow : Window
     private void FitImage()
     {
         imageZoom = 1;
-        imageRotation = 0;
         imagePanX = 0;
         imagePanY = 0;
         ApplyImageTransform();
     }
 
-    private void ApplyImageTransform(bool redraw = true)
+    private void ApplyImageTransform(bool redraw = true, bool syncWorldZoom = true)
     {
         ImageScaleTransform.ScaleX = imageZoom;
         ImageScaleTransform.ScaleY = imageZoom;
-        ImageRotateTransform.Angle = imageRotation;
         ImageTranslateTransform.X = imagePanX;
         ImageTranslateTransform.Y = imagePanY;
         if (redraw)
         {
             RedrawMarkers();
+            SyncWorldViewportToImage(syncWorldZoom);
         }
     }
 
@@ -1261,6 +1888,18 @@ public partial class MainWindow : Window
 
         var (worldX, worldY) = SphericalMercator.FromLonLat(point.Longitude, point.Latitude);
         map.Navigator.CenterOnAndZoomTo(new MPoint(worldX, worldY), 20, 0, null!);
+    }
+
+    private void CenterWorldOnPoint(ControlPointViewModel point)
+    {
+        var map = WorldMapControl.Map;
+        if (map is null)
+        {
+            return;
+        }
+
+        var (worldX, worldY) = SphericalMercator.FromLonLat(point.Longitude, point.Latitude);
+        map.Navigator.CenterOn(worldX, worldY, 0, null!);
     }
 
     private static string? GetDroppedImagePath(DragEventArgs e)

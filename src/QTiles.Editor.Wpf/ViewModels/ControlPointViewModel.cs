@@ -15,6 +15,7 @@ public sealed class ControlPointViewModel : INotifyPropertyChanged
     private double latitude;
     private double errorPixels;
     private double errorMeters;
+    private bool isLocked;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -80,6 +81,12 @@ public sealed class ControlPointViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool IsLocked
+    {
+        get => isLocked;
+        set => SetField(ref isLocked, value);
+    }
+
     public static ControlPointViewModel FromConfig(ControlPointConfig point) => new()
     {
         Enabled = point.Enabled,
@@ -88,7 +95,8 @@ public sealed class ControlPointViewModel : INotifyPropertyChanged
         ImageX = point.Image.X,
         ImageY = point.Image.Y,
         Longitude = point.World.Lon,
-        Latitude = point.World.Lat
+        Latitude = point.World.Lat,
+        IsLocked = point.Locked == true
     };
 
     public ControlPointConfig ToConfig() => new()
@@ -96,6 +104,7 @@ public sealed class ControlPointViewModel : INotifyPropertyChanged
         Enabled = Enabled,
         Id = new ControlPointId(Id),
         Name = Name,
+        Locked = IsLocked ? true : null,
         Image = new ImagePoint { X = ImageX, Y = ImageY },
         World = new WorldPoint { Lon = Longitude, Lat = Latitude }
     };

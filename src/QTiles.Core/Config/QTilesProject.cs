@@ -93,6 +93,7 @@ public sealed class ControlPointConfig
     public ControlPointId Id { get; set; } = new("");
     public string? Name { get; set; }
     public bool Enabled { get; set; } = true;
+    public bool? Locked { get; set; }
     public ImagePoint Image { get; set; } = new();
     public WorldPoint World { get; set; } = new();
 }

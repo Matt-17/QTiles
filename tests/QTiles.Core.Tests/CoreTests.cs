@@ -158,6 +158,23 @@ public sealed class YamlTests
         var roundTrip = new QTilesYamlSerializer().Deserialize(new QTilesYamlSerializer().Serialize(project));
         Assert.Equal(id, roundTrip.Georeference.ControlPoints[0].Id.Value);
     }
+
+    [Fact]
+    public void Yaml_RoundTrip_ControlPointLocked_OnlyWhenTrue()
+    {
+        var serializer = new QTilesYamlSerializer();
+        var project = new QTilesProject();
+        project.Georeference.ControlPoints.Add(new ControlPointConfig { Id = new ControlPointId("1"), Locked = true });
+        project.Georeference.ControlPoints.Add(new ControlPointConfig { Id = new ControlPointId("2") });
+
+        var yaml = serializer.Serialize(project);
+        var roundTrip = serializer.Deserialize(yaml);
+
+        Assert.Contains("locked: true", yaml);
+        Assert.DoesNotContain("locked: false", yaml);
+        Assert.True(roundTrip.Georeference.ControlPoints[0].Locked is true);
+        Assert.Null(roundTrip.Georeference.ControlPoints[1].Locked);
+    }
 }
 
 public sealed class RendererTests
