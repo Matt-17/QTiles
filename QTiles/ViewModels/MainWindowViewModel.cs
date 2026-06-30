@@ -179,10 +179,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => isPreviewEnabled;
         set
         {
+            if (value && !CanPreview)
+            {
+                value = false;
+            }
+
+            if (isPreviewEnabled == value)
+            {
+                return;
+            }
+
             isPreviewEnabled = value;
             OnPropertyChanged();
         }
     }
+
+    public bool CanPreview => CurrentSolveResult is not null && SourceImageExists();
 
     public double PreviewOpacity => project.Editor.Preview.Opacity;
 
@@ -242,6 +254,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             project.Source.Image = value;
             MarkDirty();
             OnPropertyChanged();
+            OnPropertyChanged(nameof(CanPreview));
+            DisablePreviewIfUnavailable();
         }
     }
 
@@ -433,6 +447,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             currentSolveResult = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(CanPreview));
+            DisablePreviewIfUnavailable();
         }
     }
 
@@ -1010,8 +1026,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(Format));
         OnPropertyChanged(nameof(OutputDirectory));
         OnPropertyChanged(nameof(PreviewOpacity));
+        OnPropertyChanged(nameof(CanPreview));
         OnPropertyChanged(nameof(TileSize));
         OnPropertyChanged(nameof(RenderOptionsSummary));
+        DisablePreviewIfUnavailable();
     }
 
     private void ApplyAutoZoomRange(ZoomRangeRecommendation zoomRange)
@@ -1218,6 +1236,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     }
 
     private void MarkClean() => HasUnsavedChanges = false;
+
+    private void DisablePreviewIfUnavailable()
+    {
+        if (isPreviewEnabled && !CanPreview)
+        {
+            isPreviewEnabled = false;
+            OnPropertyChanged(nameof(IsPreviewEnabled));
+        }
+    }
+
+    private bool SourceImageExists()
+    {
+        try
+        {
+            var path = ResolveSourceImagePath();
+            return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     public void SetSourceImage(string imagePath)
     {

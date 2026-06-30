@@ -17,6 +17,8 @@ using Mapsui.Tiling;
 using Mapsui.Tiling.Layers;
 using QTiles.Core.Config;
 using QTiles.Core.Geo;
+using QTiles.Core.Imaging;
+using QTiles.Core.Rendering;
 using QTiles.Core.Transforms;
 using QTiles.Services;
 using QTiles.ViewModels;
@@ -27,11 +29,14 @@ public partial class MainWindow : Window
 {
     private readonly MainWindowViewModel viewModel = new();
     private readonly EditorSettingsService settingsService = new();
+    private readonly PreviewTileService previewTileService = new();
     private readonly Dictionary<ControlPointViewModel, PropertyChangedEventHandler> pointHandlers = [];
     private readonly Dictionary<ControlPointViewModel, Grid> worldMarkers = [];
     private readonly Dictionary<ControlPointViewModel, Grid> imageMarkers = [];
-    private readonly Dictionary<string, Image> previewTileImages = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, PreviewBitmapCacheEntry> previewBitmapCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<TileCoord, Image> previewTileImages = [];
+    private readonly Dictionary<TileCoord, PreviewTileKey> previewTileKeys = [];
+    private readonly HashSet<PreviewTileKey> pendingPreviewTiles = [];
+    private readonly PreviewBitmapCache previewBitmapCache = new(512);
     private EditorSettings editorSettings = new();
     private Polygon? imageFootprintPolygon;
     private ControlPointViewModel? draggedPoint;
@@ -49,6 +54,8 @@ public partial class MainWindow : Window
     private Point worldPanOriginMercator;
     private double worldPanStartResolution;
     private bool previewMissingStatusShown;
+    private CancellationTokenSource previewTileCancellation = new();
+    private long previewStateVersion;
     private bool startupProjectLoaded;
     private bool initialWorldViewApplied;
     private bool isSyncingImageToWorld;
@@ -60,11 +67,52 @@ public partial class MainWindow : Window
     private const double MinImageZoom = 0.05;
     private const double MaxImageZoom = 64.0;
 
-    private sealed class PreviewBitmapCacheEntry
+    private sealed class PreviewBitmapCache(int capacity)
     {
-        public long LastWriteTicks { get; init; }
-        public BitmapSource Bitmap { get; init; } = null!;
+        private readonly Dictionary<PreviewTileKey, LinkedListNode<PreviewBitmapCacheEntry>> entries = [];
+        private readonly LinkedList<PreviewBitmapCacheEntry> order = [];
+
+        public bool TryGet(PreviewTileKey key, out BitmapSource? bitmap)
+        {
+            if (!entries.TryGetValue(key, out var node))
+            {
+                bitmap = null;
+                return false;
+            }
+
+            order.Remove(node);
+            order.AddFirst(node);
+            bitmap = node.Value.Bitmap;
+            return true;
+        }
+
+        public void Set(PreviewTileKey key, BitmapSource? bitmap)
+        {
+            if (entries.TryGetValue(key, out var existing))
+            {
+                order.Remove(existing);
+                entries.Remove(key);
+            }
+
+            var node = new LinkedListNode<PreviewBitmapCacheEntry>(new PreviewBitmapCacheEntry(key, bitmap));
+            order.AddFirst(node);
+            entries[key] = node;
+
+            while (entries.Count > capacity && order.Last is { } last)
+            {
+                entries.Remove(last.Value.Key);
+                order.RemoveLast();
+            }
+        }
+
+        public void Clear()
+        {
+            entries.Clear();
+            order.Clear();
+        }
     }
+
+    private sealed record PreviewBitmapCacheEntry(PreviewTileKey Key, BitmapSource? Bitmap);
 
     public MainWindow()
     {
@@ -139,6 +187,7 @@ public partial class MainWindow : Window
             }
         }
 
+        CancelPreviewTiles();
         CaptureEditorSettings();
         settingsService.Save(editorSettings);
     }
@@ -316,6 +365,8 @@ public partial class MainWindow : Window
         if (e.PropertyName is nameof(MainWindowViewModel.SourceImage))
         {
             RefreshSourceImage();
+            ClearPreviewOverlay(clearBitmapCache: true);
+            RedrawPreviewOverlay();
         }
 
         if (e.PropertyName is nameof(MainWindowViewModel.UseSatelliteMap))
@@ -340,9 +391,9 @@ public partial class MainWindow : Window
             RedrawMarkers();
         }
 
-        if (e.PropertyName is nameof(MainWindowViewModel.OutputDirectory)
-            or nameof(MainWindowViewModel.Format)
-            or nameof(MainWindowViewModel.RenderSummaryText))
+        if (e.PropertyName is nameof(MainWindowViewModel.TileSize)
+            or nameof(MainWindowViewModel.MinZoom)
+            or nameof(MainWindowViewModel.MaxZoom))
         {
             previewMissingStatusShown = false;
             ClearPreviewOverlay(clearBitmapCache: true);
@@ -357,6 +408,9 @@ public partial class MainWindow : Window
                 {
                     SyncImageViewToWorldViewport(redraw: false);
                 }
+
+                ClearPreviewOverlay(clearBitmapCache: true);
+                RedrawPreviewOverlay();
             }
 
             RedrawMarkers();
@@ -588,6 +642,7 @@ public partial class MainWindow : Window
         draggedPoint = null;
         draggedPane = null;
         RedrawMarkers();
+        RedrawPreviewOverlay();
     }
 
     private void Overlay_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -662,6 +717,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (IsDraggingMarker())
+        {
+            ClearPreviewOverlay();
+            return;
+        }
+
+        var solveResult = viewModel.CurrentSolveResult;
+        if (solveResult is null)
+        {
+            ClearPreviewOverlay();
+            ShowPreviewNeedsSolvedStatus();
+            return;
+        }
+
+        var sourceImagePath = viewModel.ResolveSourceImagePath();
+        if (!File.Exists(sourceImagePath))
+        {
+            ClearPreviewOverlay();
+            ShowPreviewMissingStatus("Preview needs a source image");
+            return;
+        }
+
         var map = WorldMapControl.Map;
         var viewport = map?.Navigator.Viewport;
         if (viewport is not { } activeViewport
@@ -673,35 +750,29 @@ public partial class MainWindow : Window
             return;
         }
 
-        var outputDirectory = viewModel.ResolveOutputDirectory();
-        var extension = NormalizeExtension(viewModel.Format);
-        if (!Directory.Exists(outputDirectory))
-        {
-            ClearPreviewOverlay();
-            ShowPreviewMissingStatus();
-            return;
-        }
-
         previewMissingStatusShown = false;
-        var visibleTiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var zoom = ViewportResolutionToZoom(activeViewport.Resolution);
+        var visibleTiles = new HashSet<TileCoord>();
         var tileSize = Math.Max(1, viewModel.TileSize);
-        var resolution = WebMercatorWorldWidth / (tileSize * Math.Pow(2.0, zoom));
-        var minWorldX = activeViewport.CenterX - activeViewport.Width * activeViewport.Resolution / 2.0;
-        var maxWorldX = activeViewport.CenterX + activeViewport.Width * activeViewport.Resolution / 2.0;
-        var minWorldY = activeViewport.CenterY - activeViewport.Height * activeViewport.Resolution / 2.0;
-        var maxWorldY = activeViewport.CenterY + activeViewport.Height * activeViewport.Resolution / 2.0;
-        var maxTile = (int)Math.Min(int.MaxValue, Math.Pow(2.0, zoom) - 1.0);
-        var minTileX = ClampTile((int)Math.Floor((minWorldX + WebMercatorHalfWorld) / (tileSize * resolution)), maxTile);
-        var maxTileX = ClampTile((int)Math.Floor((maxWorldX + WebMercatorHalfWorld) / (tileSize * resolution)), maxTile);
-        var minTileY = ClampTile((int)Math.Floor((WebMercatorHalfWorld - maxWorldY) / (tileSize * resolution)), maxTile);
-        var maxTileY = ClampTile((int)Math.Floor((WebMercatorHalfWorld - minWorldY) / (tileSize * resolution)), maxTile);
-
-        for (var x = minTileX; x <= maxTileX; x++)
+        var sourceLastWriteTicks = File.GetLastWriteTimeUtc(sourceImagePath).Ticks;
+        var previewViewport = new PreviewTileViewport(
+            activeViewport.CenterX,
+            activeViewport.CenterY,
+            activeViewport.Width,
+            activeViewport.Height,
+            activeViewport.Resolution);
+        var tiles = previewTileService.GetVisibleTiles(previewViewport, viewModel.MinZoom, viewModel.MaxZoom, tileSize);
+        foreach (var tile in tiles)
         {
-            for (var y = minTileY; y <= maxTileY; y++)
+            try
             {
-                AddOrUpdatePreviewTile(outputDirectory, extension, zoom, x, y, tileSize, resolution, activeViewport, visibleTiles);
+                var workItem = previewTileService.CreateWorkItem(sourceImagePath, sourceLastWriteTicks, solveResult, tile, tileSize);
+                AddOrUpdatePreviewTile(workItem, activeViewport, visibleTiles);
+            }
+            catch (InvalidOperationException ex)
+            {
+                ClearPreviewOverlay();
+                ShowPreviewMissingStatus($"Preview failed: {ex.Message}");
+                return;
             }
         }
 
@@ -710,112 +781,182 @@ public partial class MainWindow : Window
             PreviewOverlay.Children.Remove(previewTileImages[key]);
             previewTileImages.Remove(key);
         }
+
+        foreach (var key in previewTileKeys.Keys.Where(key => !visibleTiles.Contains(key)).ToList())
+        {
+            previewTileKeys.Remove(key);
+        }
     }
 
     private void AddOrUpdatePreviewTile(
-        string outputDirectory,
-        string extension,
-        int zoom,
-        int x,
-        int y,
-        int tileSize,
-        double resolution,
+        PreviewTileWorkItem workItem,
         Viewport viewport,
-        HashSet<string> visibleTiles)
+        HashSet<TileCoord> visibleTiles)
     {
-        var path = System.IO.Path.Combine(outputDirectory, zoom.ToString(), x.ToString(), $"{y}.{extension}");
-        if (!File.Exists(path))
+        var tile = workItem.RenderRequest.Tile;
+        visibleTiles.Add(tile);
+        previewTileKeys[tile] = workItem.Key;
+
+        if (previewBitmapCache.TryGet(workItem.Key, out var cachedBitmap) && cachedBitmap is null)
         {
+            RemovePreviewTile(tile);
             return;
         }
 
-        try
+        if (!previewTileImages.TryGetValue(tile, out var image))
         {
-            visibleTiles.Add(path);
-            var leftWorld = -WebMercatorHalfWorld + x * tileSize * resolution;
-            var rightWorld = leftWorld + tileSize * resolution;
-            var topWorld = WebMercatorHalfWorld - y * tileSize * resolution;
-            var bottomWorld = topWorld - tileSize * resolution;
-            var (left, top) = viewport.WorldToScreenXY(leftWorld, topWorld);
-            var (right, bottom) = viewport.WorldToScreenXY(rightWorld, bottomWorld);
-            if (!previewTileImages.TryGetValue(path, out var image))
+            image = new Image
             {
-                image = new Image
-                {
-                    Source = LoadPreviewBitmap(path),
-                    Stretch = Stretch.Fill,
-                    IsHitTestVisible = false,
-                    SnapsToDevicePixels = true
-                };
-                previewTileImages[path] = image;
-                PreviewOverlay.Children.Add(image);
-            }
-
-            var bitmap = LoadPreviewBitmap(path);
-            if (!ReferenceEquals(image.Source, bitmap))
-            {
-                image.Source = bitmap;
-            }
-
-            image.Width = Math.Abs(right - left);
-            image.Height = Math.Abs(bottom - top);
-            image.Opacity = Math.Clamp(viewModel.PreviewOpacity, 0, 1);
-            Canvas.SetLeft(image, Math.Min(left, right));
-            Canvas.SetTop(image, Math.Min(top, bottom));
+                Stretch = Stretch.Fill,
+                IsHitTestVisible = false,
+                SnapsToDevicePixels = true
+            };
+            previewTileImages[tile] = image;
+            PreviewOverlay.Children.Add(image);
         }
-        catch
+
+        if (cachedBitmap is not null && !ReferenceEquals(image.Source, cachedBitmap))
         {
-            // Ignore corrupt or unsupported tile images so the editor remains usable.
-            visibleTiles.Remove(path);
-            if (previewTileImages.Remove(path, out var image))
-            {
-                PreviewOverlay.Children.Remove(image);
-            }
+            image.Source = cachedBitmap;
+        }
+
+        LayoutPreviewTile(image, tile, viewport);
+
+        if (cachedBitmap is null && pendingPreviewTiles.Add(workItem.Key))
+        {
+            _ = RenderPreviewTileAsync(workItem, previewStateVersion, previewTileCancellation.Token);
         }
     }
 
-    private BitmapSource LoadPreviewBitmap(string path)
+    private void LayoutPreviewTile(Image image, TileCoord tile, Viewport viewport)
     {
-        var lastWriteTicks = File.GetLastWriteTimeUtc(path).Ticks;
-        if (previewBitmapCache.TryGetValue(path, out var entry) && entry.LastWriteTicks == lastWriteTicks)
+        var bounds = PreviewTileService.GetWorldBounds(tile, Math.Max(1, viewModel.TileSize));
+        var (left, top) = viewport.WorldToScreenXY(bounds.Left, bounds.Top);
+        var (right, bottom) = viewport.WorldToScreenXY(bounds.Right, bounds.Bottom);
+        image.Width = Math.Abs(right - left);
+        image.Height = Math.Abs(bottom - top);
+        image.Opacity = Math.Clamp(viewModel.PreviewOpacity, 0, 1);
+        Canvas.SetLeft(image, Math.Min(left, right));
+        Canvas.SetTop(image, Math.Min(top, bottom));
+    }
+
+    private async Task RenderPreviewTileAsync(
+        PreviewTileWorkItem workItem,
+        long stateVersion,
+        CancellationToken cancellationToken)
+    {
+        RenderedTileImage? renderedTile = null;
+        BitmapSource? bitmap = null;
+        try
         {
-            return entry.Bitmap;
+            renderedTile = await previewTileService.RenderAsync(workItem, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (renderedTile is not null)
+            {
+                bitmap = CreatePreviewBitmap(renderedTile);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.InvokeAsync(() =>
+            {
+                pendingPreviewTiles.Remove(workItem.Key);
+                if (previewStateVersion == stateVersion)
+                {
+                    RemovePreviewTile(workItem.RenderRequest.Tile);
+                    ShowPreviewMissingStatus($"Preview failed: {ex.Message}");
+                }
+            });
+            return;
         }
 
+        await Dispatcher.InvokeAsync(() =>
+        {
+            pendingPreviewTiles.Remove(workItem.Key);
+            if (previewStateVersion != stateVersion
+                || !previewTileKeys.TryGetValue(workItem.RenderRequest.Tile, out var currentKey)
+                || currentKey != workItem.Key)
+            {
+                return;
+            }
+
+            previewBitmapCache.Set(workItem.Key, bitmap);
+            if (bitmap is null)
+            {
+                RemovePreviewTile(workItem.RenderRequest.Tile);
+                return;
+            }
+
+            if (previewTileImages.TryGetValue(workItem.RenderRequest.Tile, out var image))
+            {
+                image.Source = bitmap;
+            }
+        });
+    }
+
+    private static BitmapSource CreatePreviewBitmap(RenderedTileImage tile)
+    {
+        using var stream = new MemoryStream(tile.Bytes);
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-        bitmap.UriSource = new System.Uri(path, UriKind.Absolute);
+        bitmap.StreamSource = stream;
         bitmap.EndInit();
         bitmap.Freeze();
-        previewBitmapCache[path] = new PreviewBitmapCacheEntry { LastWriteTicks = lastWriteTicks, Bitmap = bitmap };
         return bitmap;
     }
 
     private void ClearPreviewOverlay(bool clearBitmapCache = false)
     {
+        CancelPreviewTiles();
         PreviewOverlay.Children.Clear();
         previewTileImages.Clear();
+        previewTileKeys.Clear();
+        pendingPreviewTiles.Clear();
         if (clearBitmapCache)
         {
             previewBitmapCache.Clear();
         }
     }
 
-    private int ViewportResolutionToZoom(double resolution)
+    private void HidePreviewDuringMarkerDrag()
     {
-        var tileSize = Math.Max(1, viewModel.TileSize);
-        var rawZoom = Math.Log(WebMercatorWorldWidth / (tileSize * resolution), 2.0);
-        return Math.Clamp((int)Math.Round(rawZoom), viewModel.MinZoom, viewModel.MaxZoom);
+        if (viewModel.IsPreviewEnabled)
+        {
+            ClearPreviewOverlay();
+        }
     }
 
-    private static int ClampTile(int tile, int maxTile) => Math.Clamp(tile, 0, Math.Max(0, maxTile));
+    private bool IsDraggingMarker() => draggedPoint is not null && draggedPane is not null;
 
-    private static string NormalizeExtension(string format) =>
-        format.Equals("jpeg", StringComparison.OrdinalIgnoreCase) ? "jpg" : format.ToLowerInvariant();
+    private void CancelPreviewTiles()
+    {
+        previewStateVersion++;
+        previewTileCancellation.Cancel();
+        previewTileCancellation.Dispose();
+        previewTileCancellation = new CancellationTokenSource();
+    }
 
-    private void ShowPreviewMissingStatus()
+    private void RemovePreviewTile(TileCoord tile)
+    {
+        if (previewTileImages.Remove(tile, out var image))
+        {
+            PreviewOverlay.Children.Remove(image);
+        }
+
+        previewTileKeys.Remove(tile);
+    }
+
+    private void ShowPreviewNeedsSolvedStatus()
+    {
+        ShowPreviewMissingStatus("Preview needs a solved transform");
+    }
+
+    private void ShowPreviewMissingStatus(string message)
     {
         if (previewMissingStatusShown)
         {
@@ -823,7 +964,7 @@ public partial class MainWindow : Window
         }
 
         previewMissingStatusShown = true;
-        viewModel.Status = "No rendered tiles found in output directory";
+        viewModel.Status = message;
     }
 
     private void UpdateImageFootprint()
@@ -977,6 +1118,7 @@ public partial class MainWindow : Window
 
             draggedPoint = point;
             draggedPane = pane;
+            HidePreviewDuringMarkerDrag();
             overlay.CaptureMouse();
         };
         marker.ContextMenu = CreateMarkerContextMenu(point);

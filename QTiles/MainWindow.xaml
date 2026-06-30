@@ -927,6 +927,7 @@
                                         </StackPanel>
                                     </Button>
                                     <ToggleButton IsChecked="{Binding IsPreviewEnabled}"
+                                                  IsEnabled="{Binding CanPreview}"
                                                   Style="{StaticResource PreviewToggleButton}"
                                                   MinWidth="78"
                                                   Margin="0,0,6,6">

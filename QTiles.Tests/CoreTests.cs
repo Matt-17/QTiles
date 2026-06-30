@@ -319,6 +319,36 @@ public sealed class RendererTests
         Assert.AreEqual("nohalo", RenderResampling.ToVipsInterpolatorName("lanczos3"));
     }
 
+    [TestMethod]
+    public async Task TileImageRenderer_RenderAsync_ProducesPngBytesWithoutWritingFile()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        WriteRgbSource(source, 1, 1);
+        var outputTilePath = Path.Combine(temp.Path, "0", "0", "0.png");
+        var request = FullWorldTileRequest(source, skipEmptyTiles: false);
+
+        var rendered = await new NetVipsTileRenderer(loadSourceIntoMemory: true).RenderAsync(request, CancellationToken.None);
+
+        Assert.IsNotNull(rendered);
+        Assert.AreEqual("png", rendered.Format);
+        CollectionAssert.AreEqual(new byte[] { 137, 80, 78, 71 }, rendered.Bytes.Take(4).ToArray());
+        Assert.IsFalse(File.Exists(outputTilePath));
+    }
+
+    [TestMethod]
+    public async Task TileImageRenderer_RenderAsync_ReturnsNullForSkippedEmptyTile()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "transparent.png");
+        WriteRgbaSource(source, 1, 1, [255, 0, 0, 0]);
+        var request = FullWorldTileRequest(source, skipEmptyTiles: true);
+
+        var rendered = await new NetVipsTileRenderer().RenderAsync(request, CancellationToken.None);
+
+        Assert.IsNull(rendered);
+    }
+
     private static QTilesProject Project(string source, string output) => new()
     {
         Project = new ProjectInfo { Name = "Renderer test" },
@@ -422,6 +452,19 @@ public sealed class RendererTests
         };
     }
 
+    private static RenderedTileRequest FullWorldTileRequest(string source, bool skipEmptyTiles) => new(
+        source,
+        new AffineTransform(1, 0, 0, 0, 1, 0),
+        new TileCoord(0, 0, 0),
+        1,
+        new TileRenderOptions(
+            "png",
+            90,
+            Overwrite: true,
+            skipEmptyTiles,
+            RenderResampling.Nearest,
+            "transparent"));
+
     private sealed class FixedImageInfoReader(int width, int height) : IImageInfoReader
     {
         public ImageInfo Read(string path) => new(width, height);
@@ -444,6 +487,101 @@ public sealed class RendererTests
     private sealed class TempFolder : IDisposable
     {
         public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"qtiles-{Guid.NewGuid():N}");
+        public TempFolder() => Directory.CreateDirectory(Path);
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+}
+
+[TestClass]
+public sealed class PreviewTileServiceTests
+{
+    private const double WebMercatorWorldWidth = 40075016.68557849;
+
+    [TestMethod]
+    public void GetVisibleTiles_ReturnsCurrentViewportTileCoordinates()
+    {
+        var service = new PreviewTileService(new RecordingTileImageRenderer());
+        var resolution = WebMercatorWorldWidth / (256 * Math.Pow(2.0, 1));
+        var viewport = new PreviewTileViewport(0, 0, 256, 256, resolution);
+
+        var tiles = service.GetVisibleTiles(viewport, minZoom: 0, maxZoom: 4, tileSize: 256);
+
+        Assert.AreEqual(4, tiles.Count);
+        Assert.IsTrue(tiles.Contains(new TileCoord(1, 0, 0)));
+        Assert.IsTrue(tiles.Contains(new TileCoord(1, 0, 1)));
+        Assert.IsTrue(tiles.Contains(new TileCoord(1, 1, 0)));
+        Assert.IsTrue(tiles.Contains(new TileCoord(1, 1, 1)));
+    }
+
+    [TestMethod]
+    public void CreateWorkItem_UsesCurrentSourceAndPreviewOptionsWithoutOutputDirectory()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        var staleTile = Path.Combine(temp.Path, "tiles", "0", "0", "0.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(staleTile)!);
+        File.WriteAllText(source, "source");
+        File.WriteAllText(staleTile, "stale");
+        var solve = IdentitySolveResult();
+        var service = new PreviewTileService(new RecordingTileImageRenderer());
+
+        var workItem = service.CreateWorkItem(
+            source,
+            File.GetLastWriteTimeUtc(source).Ticks,
+            solve,
+            new TileCoord(0, 0, 0),
+            256);
+
+        Assert.AreEqual(source, workItem.RenderRequest.SourceImagePath);
+        Assert.AreEqual("png", workItem.RenderRequest.Options.Format);
+        Assert.AreEqual(RenderResampling.Bilinear, workItem.RenderRequest.Options.Resampling);
+        Assert.IsTrue(workItem.RenderRequest.Options.SkipEmptyTiles);
+        Assert.AreEqual(256, workItem.RenderRequest.TileSize);
+    }
+
+    [TestMethod]
+    public async Task RenderAsync_CancelledBeforeDispatch_DoesNotInvokeRenderer()
+    {
+        var renderer = new RecordingTileImageRenderer();
+        var service = new PreviewTileService(renderer);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var workItem = service.CreateWorkItem("source.png", 1, IdentitySolveResult(), new TileCoord(0, 0, 0), 256);
+
+        try
+        {
+            await service.RenderAsync(workItem, cts.Token);
+            Assert.Fail("Expected preview rendering to observe the cancelled token.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        Assert.AreEqual(0, renderer.Requests.Count);
+    }
+
+    private static TransformSolveResult IdentitySolveResult() => new(
+        "affine",
+        new AffineTransform(1, 0, 0, 0, 1, 0),
+        [],
+        0,
+        0,
+        new GeoBounds(-180, -85, 180, 85));
+
+    private sealed class RecordingTileImageRenderer : ITileImageRenderer
+    {
+        public List<RenderedTileRequest> Requests { get; } = [];
+
+        public Task<RenderedTileImage?> RenderAsync(RenderedTileRequest request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return Task.FromResult<RenderedTileImage?>(new RenderedTileImage([1, 2, 3, 4], "png"));
+        }
+    }
+
+    private sealed class TempFolder : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"qtiles-preview-{Guid.NewGuid():N}");
         public TempFolder() => Directory.CreateDirectory(Path);
         public void Dispose() => Directory.Delete(Path, recursive: true);
     }

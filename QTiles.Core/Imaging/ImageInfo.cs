@@ -36,32 +36,73 @@ public sealed record RenderedTileRequest(
     int TileSize,
     TileRenderOptions Options);
 
+public sealed record RenderedTileImage(byte[] Bytes, string Format);
+
+public interface ITileImageRenderer
+{
+    Task<RenderedTileImage?> RenderAsync(RenderedTileRequest request, CancellationToken cancellationToken);
+}
+
 public interface IRenderedTileWriter
 {
     Task<bool> WriteAsync(string path, RenderedTileRequest request, CancellationToken cancellationToken);
 }
 
-public sealed class NetVipsTileRenderer : IRenderedTileWriter
+public sealed class NetVipsTileRenderer : IRenderedTileWriter, ITileImageRenderer
 {
-    public Task<bool> WriteAsync(string path, RenderedTileRequest request, CancellationToken cancellationToken)
+    private readonly bool loadSourceIntoMemory;
+
+    public NetVipsTileRenderer(bool loadSourceIntoMemory = false)
+    {
+        this.loadSourceIntoMemory = loadSourceIntoMemory;
+    }
+
+    public async Task<bool> WriteAsync(string path, RenderedTileRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         if (File.Exists(path) && !request.Options.Overwrite)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        using var source = Image.NewFromFile(request.SourceImagePath, access: Enums.Access.Random);
+        var tile = await RenderAsync(request, cancellationToken);
+        if (tile is null)
+        {
+            return false;
+        }
+
+        await File.WriteAllBytesAsync(path, tile.Bytes, cancellationToken);
+        return true;
+    }
+
+    public async Task<RenderedTileImage?> RenderAsync(RenderedTileRequest request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var source = await LoadSourceAsync(request.SourceImagePath, cancellationToken);
         using var renderSource = EnsureAlpha(source);
         using var tile = RenderTile(renderSource, request);
         if (request.Options.SkipEmptyTiles && HasTransparentAlpha(tile))
         {
-            return Task.FromResult(false);
+            return null;
         }
 
-        Save(tile, path, request.Options);
-        return Task.FromResult(true);
+        var format = NormalizeFormat(request.Options.Format);
+        var bytes = Encode(tile, format, request.Options);
+        return new RenderedTileImage(bytes, format);
+    }
+
+    private async Task<Image> LoadSourceAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!loadSourceIntoMemory)
+        {
+            return Image.NewFromFile(path, access: Enums.Access.Random);
+        }
+
+        var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Image.NewFromBuffer(bytes, access: Enums.Access.Random);
     }
 
     private static Image RenderTile(Image source, RenderedTileRequest request)
@@ -138,23 +179,20 @@ public sealed class NetVipsTileRenderer : IRenderedTileWriter
         return alpha.Max() <= 0.0;
     }
 
-    private static void Save(Image tile, string path, TileRenderOptions options)
+    private static byte[] Encode(Image tile, string format, TileRenderOptions options)
     {
-        var format = NormalizeFormat(options.Format);
         if (format == "jpg")
         {
             using var flattened = tile.Flatten(background: ParseBackground(options.Background));
-            flattened.Jpegsave(path, q: options.Quality);
-            return;
+            return flattened.JpegsaveBuffer(q: options.Quality);
         }
 
         if (format == "webp")
         {
-            tile.Webpsave(path, q: options.Quality);
-            return;
+            return tile.WebpsaveBuffer(q: options.Quality);
         }
 
-        tile.Pngsave(path);
+        return tile.PngsaveBuffer();
     }
 
     private static string NormalizeFormat(string format) =>
