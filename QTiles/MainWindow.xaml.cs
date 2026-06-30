@@ -69,6 +69,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         editorSettings = settingsService.Load();
+        viewModel.UseEditorSettings(editorSettings, () => settingsService.Save(editorSettings));
         ApplyWindowSettings(editorSettings.Window);
         DataContext = viewModel;
         Loaded += OnLoaded;

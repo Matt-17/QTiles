@@ -44,6 +44,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool isViewSyncEnabled = true;
     private string renderSummaryText = "No render yet";
     private CancellationTokenSource? renderCancellation;
+    private EditorSettings editorSettings = new();
+    private Action? editorSettingsChanged;
     private readonly RelayCommand cancelRenderCommand;
     private readonly Dictionary<ControlPointViewModel, PropertyChangedEventHandler> pointHandlers = [];
     private const double ReviewErrorPixels = 2.0;
@@ -70,6 +72,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         AddPointCommand = new RelayCommand(AddPoint);
         DeletePointCommand = new RelayCommand(DeleteSelectedPoint);
         ControlPoints.CollectionChanged += ControlPointsOnCollectionChanged;
+    }
+
+    public void UseEditorSettings(EditorSettings settings, Action? settingsChanged = null)
+    {
+        editorSettings = settings;
+        editorSettings.LastOpenDirectory ??= string.Empty;
+        editorSettingsChanged = settingsChanged;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -528,9 +537,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             Filter = ProjectFilter,
             Title = "Open QTiles project or source image"
         };
+        ApplyInitialOpenDirectory(dialog);
 
         if (dialog.ShowDialog() == true)
         {
+            RememberOpenDirectory(dialog.FileName);
             if (IsProjectFile(dialog.FileName))
             {
                 await LoadAsync(dialog.FileName);
@@ -547,6 +558,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         try
         {
             project = await projectService.OpenAsync(path);
+            RememberOpenDirectory(path);
             projectPath = path;
             RefreshFromProject();
             Status = $"Opened {Path.GetFileName(path)}";
@@ -590,15 +602,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             Filter = ImageFilter,
             Title = "Choose source image"
         };
-
-        var currentPath = ResolveSourceImagePath();
-        if (File.Exists(currentPath))
-        {
-            dialog.InitialDirectory = Path.GetDirectoryName(currentPath);
-        }
+        ApplyInitialOpenDirectory(dialog, ResolveSourceImagePath());
 
         if (dialog.ShowDialog() == true)
         {
+            RememberOpenDirectory(dialog.FileName);
             SetSourceImage(dialog.FileName);
         }
     }
@@ -986,6 +994,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             return;
         }
 
+        RememberOpenDirectory(imagePath);
         SourceImage = CreateProjectPathForSourceImage(imagePath);
         ResetAutoZoomRange();
         if (string.IsNullOrWhiteSpace(ProjectName) || ProjectName == "QTiles project")
@@ -1067,6 +1076,74 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         var extension = Path.GetExtension(path);
         return extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".yml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void ApplyInitialOpenDirectory(Microsoft.Win32.FileDialog dialog, string? fallbackPath = null)
+    {
+        if (TryGetExistingDirectory(editorSettings.LastOpenDirectory, out var directory)
+            || TryGetDirectoryForPath(fallbackPath, out directory))
+        {
+            dialog.InitialDirectory = directory;
+        }
+    }
+
+    private void RememberOpenDirectory(string path)
+    {
+        if (!TryGetDirectoryForPath(path, out var directory)
+            || string.Equals(editorSettings.LastOpenDirectory, directory, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        editorSettings.LastOpenDirectory = directory;
+        editorSettingsChanged?.Invoke();
+    }
+
+    private static bool TryGetDirectoryForPath(string? path, out string directory)
+    {
+        directory = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var candidate = Directory.Exists(fullPath)
+                ? fullPath
+                : Path.GetDirectoryName(fullPath);
+            return TryGetExistingDirectory(candidate, out directory);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetExistingDirectory(string? path, out string directory)
+    {
+        directory = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (!Directory.Exists(fullPath))
+            {
+                return false;
+            }
+
+            directory = fullPath;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public static bool IsSupportedSourceImageFile(string path)

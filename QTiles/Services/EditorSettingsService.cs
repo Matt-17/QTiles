@@ -62,6 +62,7 @@ public sealed class EditorSettingsService
         settings ??= new EditorSettings();
         settings.Window ??= new EditorWindowSettings();
         settings.LastMapView ??= new EditorMapViewSettings();
+        settings.LastOpenDirectory ??= string.Empty;
         return settings;
     }
 }
@@ -71,6 +72,7 @@ public sealed class EditorSettings
     public int Version { get; set; } = 1;
     public EditorWindowSettings Window { get; set; } = new();
     public EditorMapViewSettings LastMapView { get; set; } = new();
+    public string LastOpenDirectory { get; set; } = string.Empty;
 }
 
 public sealed class EditorWindowSettings
