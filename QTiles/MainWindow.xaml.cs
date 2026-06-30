@@ -400,6 +400,13 @@ public partial class MainWindow : Window
             RedrawPreviewOverlay();
         }
 
+        if (e.PropertyName is nameof(MainWindowViewModel.CurrentPreviewPlan))
+        {
+            previewMissingStatusShown = false;
+            ClearPreviewOverlay(clearBitmapCache: true);
+            RedrawPreviewOverlay();
+        }
+
         if (e.PropertyName is nameof(MainWindowViewModel.SelectedPoint) or nameof(MainWindowViewModel.CurrentSolveResult))
         {
             if (e.PropertyName is nameof(MainWindowViewModel.CurrentSolveResult))
@@ -557,7 +564,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        viewModel.HandleImagePaneClick(image.X, image.Y);
+        double? lon = null;
+        double? lat = null;
+        if (TryGetCurrentWorldViewCenter(out var worldCenter))
+        {
+            lon = worldCenter.Lon;
+            lat = worldCenter.Lat;
+        }
+
+        viewModel.HandleImagePaneClick(image.X, image.Y, lon, lat);
         RedrawMarkers();
         e.Handled = true;
     }
@@ -723,19 +738,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        var solveResult = viewModel.CurrentSolveResult;
-        if (solveResult is null)
+        var previewPlan = viewModel.CurrentPreviewPlan;
+        if (previewPlan is null)
         {
             ClearPreviewOverlay();
             ShowPreviewNeedsSolvedStatus();
-            return;
-        }
-
-        var sourceImagePath = viewModel.ResolveSourceImagePath();
-        if (!File.Exists(sourceImagePath))
-        {
-            ClearPreviewOverlay();
-            ShowPreviewMissingStatus("Preview needs a source image");
             return;
         }
 
@@ -753,7 +760,6 @@ public partial class MainWindow : Window
         previewMissingStatusShown = false;
         var visibleTiles = new HashSet<TileCoord>();
         var tileSize = Math.Max(1, viewModel.TileSize);
-        var sourceLastWriteTicks = File.GetLastWriteTimeUtc(sourceImagePath).Ticks;
         var previewViewport = new PreviewTileViewport(
             activeViewport.CenterX,
             activeViewport.CenterY,
@@ -765,7 +771,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                var workItem = previewTileService.CreateWorkItem(sourceImagePath, sourceLastWriteTicks, solveResult, tile, tileSize);
+                var workItem = previewTileService.CreateWorkItem(previewPlan, tile, tileSize);
                 AddOrUpdatePreviewTile(workItem, activeViewport, visibleTiles);
             }
             catch (InvalidOperationException ex)
@@ -1341,6 +1347,29 @@ public partial class MainWindow : Window
         var (worldX, worldY) = activeViewport.ScreenToWorldXY(point.X, point.Y);
         var (lon, lat) = SphericalMercator.ToLonLat(worldX, worldY);
         return new GeoPoint(lon, lat);
+    }
+
+    private bool TryGetCurrentWorldViewCenter(out GeoPoint geo)
+    {
+        geo = new GeoPoint(0, 0);
+        var viewport = WorldMapControl.Map?.Navigator.Viewport;
+        if (viewport is not { } activeViewport
+            || activeViewport.Width <= 0
+            || activeViewport.Height <= 0)
+        {
+            return false;
+        }
+
+        var (lon, lat) = SphericalMercator.ToLonLat(activeViewport.CenterX, activeViewport.CenterY);
+        if (!double.IsFinite(lon) || !double.IsFinite(lat))
+        {
+            return false;
+        }
+
+        geo = new GeoPoint(
+            Math.Clamp(lon, -180.0, 180.0),
+            Math.Clamp(lat, -WebMercator.MaxLatitude, WebMercator.MaxLatitude));
+        return true;
     }
 
     private Point ScreenToImage(Point point)

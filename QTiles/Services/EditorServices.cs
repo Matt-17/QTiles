@@ -44,7 +44,8 @@ public sealed class MapsuiWorldMapService
 
 public sealed class ImageMapService
 {
-    public string Describe(QTilesProject project) => project.Source.Image;
+    public string Describe(QTilesProject project) =>
+        string.Join(", ", ProjectSources.GetEffectiveSources(project).Select(ProjectSources.DisplayName));
 }
 
 public sealed class PointPairingService

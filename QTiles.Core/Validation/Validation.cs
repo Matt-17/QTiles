@@ -22,12 +22,38 @@ public sealed class ProjectValidator
             messages.Add(Error("unsupported-version", $"YAML version {project.Version} is not supported."));
         }
 
-        var imagePath = !string.IsNullOrWhiteSpace(projectPath)
-            ? Resolve(Path.GetDirectoryName(Path.GetFullPath(projectPath)) ?? Environment.CurrentDirectory, project.Source.Image)
-            : ProjectPaths.Resolve(project, project.Source.Image);
-        if (string.IsNullOrWhiteSpace(project.Source.Image) || !File.Exists(imagePath))
+        var sources = ProjectSources.GetEffectiveSources(project);
+        if (ProjectSources.HasExplicitSources(project))
         {
-            messages.Add(Error("source-image-missing", $"Source image does not exist: {project.Source.Image}"));
+            var duplicateIds = sources
+                .Where(source => !string.IsNullOrWhiteSpace(source.Id))
+                .GroupBy(source => source.Id, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key)
+                .ToList();
+            foreach (var id in duplicateIds)
+            {
+                messages.Add(Error("source-id-duplicate", $"Source id is used more than once: {id}"));
+            }
+        }
+
+        var enabledSources = sources.Where(source => source.Enabled).ToList();
+        if (enabledSources.Count == 0)
+        {
+            messages.Add(Error("source-none-enabled", "At least one source image must be enabled."));
+        }
+
+        foreach (var source in sources)
+        {
+            if (!double.IsFinite(source.Opacity) || source.Opacity is < 0.0 or > 1.0)
+            {
+                messages.Add(Error("source-opacity", $"Source {ProjectSources.DisplayName(source)} opacity must be between 0 and 1."));
+            }
+        }
+
+        foreach (var source in enabledSources)
+        {
+            ValidateSource(project, projectPath, source, messages);
         }
 
         if (project.Render.TileSize <= 0)
@@ -50,31 +76,6 @@ public sealed class ProjectValidator
             messages.Add(Error("resampling", $"render.resampling must be one of: {string.Join(", ", RenderResampling.Values)}."));
         }
 
-        var enabled = project.Georeference.ControlPoints.Where(p => p.Enabled).ToList();
-        var transform = project.Georeference.Transform.Type.Trim().ToLowerInvariant();
-        if (transform == "affine" && enabled.Count < 3)
-        {
-            messages.Add(Error("affine-points", "Affine transform requires at least 3 enabled control points."));
-        }
-
-        if (transform == "similarity" && enabled.Count < 2)
-        {
-            messages.Add(Error("similarity-points", "Similarity transform requires at least 2 enabled control points."));
-        }
-
-        if (transform == "affine" && enabled.Count < 4)
-        {
-            messages.Add(Warning("affine-redundancy", "Fewer than 4 enabled points leaves no redundancy for affine error checking."));
-        }
-
-        foreach (var point in enabled)
-        {
-            if (point.World.Lon is < -180 or > 180 || point.World.Lat is < -90 or > 90)
-            {
-                messages.Add(Error("lon-lat", $"Control point {point.Id} has invalid lon/lat."));
-            }
-        }
-
         if (project.Output.TileJson)
         {
             messages.Add(Info("tilejson", "TileJSON will be written."));
@@ -86,6 +87,47 @@ public sealed class ProjectValidator
         }
 
         return messages;
+    }
+
+    private static void ValidateSource(
+        QTilesProject project,
+        string? projectPath,
+        ProjectSourceConfig source,
+        List<ValidationMessage> messages)
+    {
+        var imagePath = !string.IsNullOrWhiteSpace(projectPath)
+            ? Resolve(Path.GetDirectoryName(Path.GetFullPath(projectPath)) ?? Environment.CurrentDirectory, source.Image)
+            : ProjectPaths.Resolve(project, source.Image);
+        var sourceName = ProjectSources.DisplayName(source);
+        if (string.IsNullOrWhiteSpace(source.Image) || !File.Exists(imagePath))
+        {
+            messages.Add(Error("source-image-missing", $"Source {sourceName} image does not exist: {source.Image}"));
+        }
+
+        var enabled = source.Georeference.ControlPoints.Where(p => p.Enabled).ToList();
+        var transform = source.Georeference.Transform.Type.Trim().ToLowerInvariant();
+        if (transform == "affine" && enabled.Count < 3)
+        {
+            messages.Add(Error("affine-points", $"Source {sourceName} affine transform requires at least 3 enabled control points."));
+        }
+
+        if (transform == "similarity" && enabled.Count < 2)
+        {
+            messages.Add(Error("similarity-points", $"Source {sourceName} similarity transform requires at least 2 enabled control points."));
+        }
+
+        if (transform == "affine" && enabled.Count < 4)
+        {
+            messages.Add(Warning("affine-redundancy", $"Source {sourceName} has fewer than 4 enabled points, leaving no redundancy for affine error checking."));
+        }
+
+        foreach (var point in enabled)
+        {
+            if (point.World.Lon is < -180 or > 180 || point.World.Lat is < -90 or > 90)
+            {
+                messages.Add(Error("lon-lat", $"Source {sourceName} control point {point.Id} has invalid lon/lat."));
+            }
+        }
     }
 
     public static bool HasErrors(IEnumerable<ValidationMessage> messages) => messages.Any(m => m.Severity == ValidationSeverity.Error);

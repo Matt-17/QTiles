@@ -163,25 +163,26 @@ public static class SolveCommand
     public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
     {
         var (project, _, json) = await ValidateCommand.LoadAsync(args, cancellationToken);
-        var image = new NetVipsImageInfoReader().Read(ProjectPaths.Resolve(project, project.Source.Image));
-        var solver = new TransformSolver();
-        var initialResult = solver.Solve(project, image.Width, image.Height);
-        var zoomRange = ZoomRangeCalculator.Resolve(project.Render, initialResult, image.Width, image.Height);
-        var result = zoomRange.MaxZoom == project.Render.MaxZoom
-            ? initialResult
-            : solver.Solve(project, image.Width, image.Height, zoomRange.MaxZoom);
+        var plan = new ProjectRenderPlanner().CreatePlan(project);
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+            Console.WriteLine(JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true }));
         }
         else
         {
-            Console.WriteLine($"Transform: {result.TransformType}");
-            Console.WriteLine($"Enabled points: {project.Georeference.ControlPoints.Count(p => p.Enabled)}");
-            Console.WriteLine($"RMS error: {result.RmsPixelsAtMaxZoom:0.###} px at max zoom {zoomRange.MaxZoom}");
-            Console.WriteLine($"Max error: {result.MaxPixelsAtMaxZoom:0.###} px");
-            Console.WriteLine($"Bounds: [{result.Bounds.West:0.######}, {result.Bounds.South:0.######}, {result.Bounds.East:0.######}, {result.Bounds.North:0.######}]");
-            Console.WriteLine($"Recommended zoom range: {zoomRange.MinZoom}..{zoomRange.MaxZoom}");
+            Console.WriteLine($"Sources: {plan.Sources.Count}");
+            foreach (var source in plan.Sources)
+            {
+                Console.WriteLine($"Source {source.Source.Id}: {ProjectSources.DisplayName(source.Source)}");
+                Console.WriteLine($"  Transform: {source.SolveResult.TransformType}");
+                Console.WriteLine($"  Enabled points: {source.Source.Georeference.ControlPoints.Count(p => p.Enabled)}");
+                Console.WriteLine($"  RMS error: {source.SolveResult.RmsPixelsAtMaxZoom:0.###} px at max zoom {plan.ZoomRange.MaxZoom}");
+                Console.WriteLine($"  Max error: {source.SolveResult.MaxPixelsAtMaxZoom:0.###} px");
+                Console.WriteLine($"  Bounds: [{source.SolveResult.Bounds.West:0.######}, {source.SolveResult.Bounds.South:0.######}, {source.SolveResult.Bounds.East:0.######}, {source.SolveResult.Bounds.North:0.######}]");
+            }
+
+            Console.WriteLine($"Project bounds: [{plan.Bounds.West:0.######}, {plan.Bounds.South:0.######}, {plan.Bounds.East:0.######}, {plan.Bounds.North:0.######}]");
+            Console.WriteLine($"Recommended zoom range: {plan.ZoomRange.MinZoom}..{plan.ZoomRange.MaxZoom}");
         }
 
         return 0;
@@ -254,16 +255,10 @@ public static class TileJsonCommand
         reader.Parse();
         var path = reader.ProjectPath ?? throw new InvalidOperationException("Project YAML path is required.");
         var project = await new QTilesYamlSerializer().ReadAsync(path, cancellationToken);
-        var solver = new TransformSolver();
-        var image = new NetVipsImageInfoReader().Read(ProjectPaths.Resolve(project, project.Source.Image));
-        var initialResult = solver.Solve(project, image.Width, image.Height);
-        var zoomRange = ZoomRangeCalculator.Resolve(project.Render, initialResult, image.Width, image.Height);
-        var result = zoomRange.MaxZoom == project.Render.MaxZoom
-            ? initialResult
-            : solver.Solve(project, image.Width, image.Height, zoomRange.MaxZoom);
-        var summary = new RenderSummary(0, 0, zoomRange.MinZoom, zoomRange.MaxZoom, result.Bounds, TimeSpan.Zero);
+        var plan = new ProjectRenderPlanner().CreatePlan(project);
+        var summary = new RenderSummary(0, 0, plan.ZoomRange.MinZoom, plan.ZoomRange.MaxZoom, plan.Bounds, TimeSpan.Zero);
         var tileJsonPath = ProjectPaths.Resolve(project, project.Output.TileJsonPath);
-        await TileJsonWriter.WriteAsync(project, result, summary, tileJsonPath, cancellationToken);
+        await TileJsonWriter.WriteAsync(project, plan, summary, tileJsonPath, cancellationToken);
         Console.WriteLine(project.Output.TileJsonPath);
         return 0;
     }

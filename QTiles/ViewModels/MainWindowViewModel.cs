@@ -28,6 +28,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string solveFeedbackBrush = "#AAB3C1";
     private string rmsText = "n/a";
     private string maxErrorText = "n/a";
+    private ProjectSourceViewModel? selectedSource;
+    private ProjectRenderPlan? currentPreviewPlan;
     private double renderPercent;
     private bool canRender;
     private ControlPointViewModel? selectedPoint;
@@ -43,13 +45,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool useSatelliteMap;
     private bool isPreviewEnabled;
     private bool isViewSyncEnabled = true;
+    private bool usesExplicitSources;
+    private bool isLoadingControlPoints;
     private string renderSummaryText = "No render yet";
     private CancellationTokenSource? renderCancellation;
     private EditorSettings editorSettings = new();
     private Action? editorSettingsChanged;
     private readonly RelayCommand cancelRenderCommand;
     private readonly RelayCommand deletePointCommand;
+    private readonly RelayCommand removeSourceCommand;
     private readonly Dictionary<ControlPointViewModel, PropertyChangedEventHandler> pointHandlers = [];
+    private readonly Dictionary<ProjectSourceViewModel, PropertyChangedEventHandler> sourceHandlers = [];
     private const int MaxRecentItems = 8;
     private const double ReviewErrorPixels = 2.0;
     private const double HighErrorPixels = 8.0;
@@ -65,6 +71,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OpenCommand = new AsyncCommand(OpenAsync);
         SaveCommand = new AsyncCommand(SaveAsync);
         ChooseSourceImageCommand = new RelayCommand(ChooseSourceImage);
+        AddSourceCommand = new RelayCommand(AddSource);
+        removeSourceCommand = new RelayCommand(RemoveSelectedSource, () => CanRemoveSelectedSource);
+        RemoveSourceCommand = removeSourceCommand;
         OpenRecentProjectCommand = new RelayCommand<string>(path => _ = OpenRecentProjectAsync(path ?? string.Empty), HasPath);
         OpenRecentImageCommand = new RelayCommand<string>(path => OpenRecentImage(path ?? string.Empty), HasPath);
         OpenRecentOutputDirectoryCommand = new RelayCommand<string>(path => OpenRecentOutputDirectory(path ?? string.Empty), HasPath);
@@ -79,6 +88,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         deletePointCommand = new RelayCommand(DeleteSelectedPoint, () => HasSelectedPoint);
         DeletePointCommand = deletePointCommand;
         ControlPoints.CollectionChanged += ControlPointsOnCollectionChanged;
+        Sources.CollectionChanged += SourcesOnCollectionChanged;
     }
 
     public void UseEditorSettings(EditorSettings settings, Action? settingsChanged = null)
@@ -95,6 +105,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ObservableCollection<ControlPointViewModel> ControlPoints { get; } = [];
+    public ObservableCollection<ProjectSourceViewModel> Sources { get; } = [];
     public ObservableCollection<RecentFileViewModel> RecentProjects { get; } = [];
     public ObservableCollection<RecentFileViewModel> RecentImages { get; } = [];
     public ObservableCollection<RecentFileViewModel> RecentOutputDirectories { get; } = [];
@@ -152,6 +163,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public ICommand OpenCommand { get; }
     public ICommand SaveCommand { get; }
     public ICommand ChooseSourceImageCommand { get; }
+    public ICommand AddSourceCommand { get; }
+    public ICommand RemoveSourceCommand { get; }
     public ICommand OpenRecentProjectCommand { get; }
     public ICommand OpenRecentImageCommand { get; }
     public ICommand OpenRecentOutputDirectoryCommand { get; }
@@ -194,7 +207,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    public bool CanPreview => CurrentSolveResult is not null && SourceImageExists();
+    public bool CanPreview => CurrentPreviewPlan is { Sources.Count: > 0 };
 
     public double PreviewOpacity => project.Editor.Preview.Opacity;
 
@@ -231,6 +244,46 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    public ProjectSourceViewModel? SelectedSource
+    {
+        get => selectedSource;
+        set
+        {
+            if (ReferenceEquals(selectedSource, value))
+            {
+                return;
+            }
+
+            SyncSelectedSourceControlPoints();
+            selectedSource = value;
+            pendingPoint = null;
+            pendingSide = null;
+            SelectedPoint = null;
+            LoadControlPointsFromSelectedSource();
+            CurrentSolveResult = null;
+            ClearErrors();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SourceImage));
+            OnPropertyChanged(nameof(SelectedSourceName));
+            OnPropertyChanged(nameof(CanRemoveSelectedSource));
+            OnPropertyChanged(nameof(CanPreview));
+            removeSourceCommand.RaiseCanExecuteChanged();
+            DisablePreviewIfUnavailable();
+            if (selectedSource is not null)
+            {
+                Validate();
+                if (CanAttemptSolve())
+                {
+                    Solve();
+                }
+            }
+        }
+    }
+
+    public string SelectedSourceName => SelectedSource?.DisplayName ?? "Image";
+
+    public bool CanRemoveSelectedSource => SelectedSource is not null && Sources.Count > 1;
+
     public bool IsViewSyncEnabled
     {
         get => isViewSyncEnabled;
@@ -243,15 +296,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public string SourceImage
     {
-        get => project.Source.Image;
+        get => SelectedSource?.Image ?? project.Source.Image;
         set
         {
-            if (project.Source.Image == value)
+            var source = EnsureSelectedSource();
+            if (source.Image == value)
             {
                 return;
             }
 
-            project.Source.Image = value;
+            source.Image = value;
+            if (!usesExplicitSources)
+            {
+                project.Source.Image = value;
+            }
+
             MarkDirty();
             OnPropertyChanged();
             OnPropertyChanged(nameof(CanPreview));
@@ -420,6 +479,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    public string RootStatusText => CurrentRootDirectory is { Length: > 0 } root
+        ? $"Root: {root}"
+        : "Root: (not set)";
+
     public string SolveFeedbackBrush
     {
         get => solveFeedbackBrush;
@@ -452,6 +515,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    public ProjectRenderPlan? CurrentPreviewPlan
+    {
+        get => currentPreviewPlan;
+        private set
+        {
+            if (ReferenceEquals(currentPreviewPlan, value))
+            {
+                return;
+            }
+
+            currentPreviewPlan = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanPreview));
+            DisablePreviewIfUnavailable();
+        }
+    }
+
     public async Task LoadStartupProjectAsync(string[] args)
     {
         if (args.FirstOrDefault() is { Length: > 0 } path && File.Exists(path))
@@ -460,9 +540,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    public string ResolveSourceImagePath() => ProjectPaths.Resolve(project, project.Source.Image);
+    public string ResolveSourceImagePath() => ResolveProjectPath(SourceImage);
 
-    public string ResolveOutputDirectory() => ProjectPaths.Resolve(project, project.Output.Directory);
+    public string ResolveOutputDirectory() => ResolveProjectPath(project.Output.Directory);
 
     public RenderOptionsSnapshot CreateRenderOptionsSnapshot() => new(
         project.Render.TileSize,
@@ -545,7 +625,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         Status = $"Render options: {RenderResampling.DisplayName(normalizedResampling)}, q{options.Quality}";
     }
 
-    public void HandleImagePaneClick(double imageX, double imageY)
+    public void HandleImagePaneClick(double imageX, double imageY, double? lon = null, double? lat = null)
     {
         if (EditorMode == "Delete point")
         {
@@ -567,6 +647,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         var point = CreatePoint();
         point.ImageX = imageX;
         point.ImageY = imageY;
+        if (lon.HasValue && lat.HasValue)
+        {
+            point.Longitude = lon.Value;
+            point.Latitude = lat.Value;
+        }
+
         ControlPoints.Add(point);
         SelectedPoint = point;
 
@@ -618,7 +704,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             pendingPoint = point;
             pendingSide = "world";
-            Status = "Click the source image to finish the pair";
+            Status = "Click the selected image to finish the pair";
         }
         else
         {
@@ -668,7 +754,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             CheckFileExists = true,
             Filter = ProjectFilter,
-            Title = "Open QTiles project or source image"
+            Title = "Open QTiles project or image"
         };
         ApplyInitialOpenDirectory(dialog);
 
@@ -727,19 +813,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 return false;
             }
 
-            projectPath = dialog.FileName;
+            var savePath = dialog.FileName;
+            return await SaveProjectAsync(savePath);
         }
 
+        return await SaveProjectAsync(projectPath);
+    }
+
+    private async Task<bool> SaveProjectAsync(string savePath)
+    {
         try
         {
-            project.BaseDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath));
-            RebaseSourceImagePathForProject();
             SyncToProject();
-            await projectService.SaveAsync(project, projectPath);
-            RememberOpenDirectory(projectPath);
-            AddRecentProject(projectPath);
+            var previousRootDirectory = CurrentRootDirectory;
+            var saveDirectory = Path.GetDirectoryName(Path.GetFullPath(savePath)) ?? Environment.CurrentDirectory;
+            RebaseProjectPaths(previousRootDirectory, saveDirectory);
+            project.BaseDirectory = saveDirectory;
+            projectPath = savePath;
+            ApplyProjectPathsToViewModels();
+            await projectService.SaveAsync(project, savePath);
+            RememberOpenDirectory(savePath);
+            AddRecentProject(savePath);
             MarkClean();
-            Status = $"Saved {Path.GetFileName(projectPath)}";
+            OnPropertyChanged(nameof(OutputDirectory));
+            OnPropertyChanged(nameof(SourceImage));
+            OnPropertyChanged(nameof(RootStatusText));
+            Status = $"Saved {Path.GetFileName(savePath)}";
             return true;
         }
         catch (Exception ex)
@@ -838,7 +937,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             CheckFileExists = true,
             Filter = ImageFilter,
-            Title = "Choose source image"
+            Title = "Choose image"
         };
         ApplyInitialOpenDirectory(dialog, ResolveSourceImagePath());
 
@@ -860,6 +959,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         if (Directory.Exists(currentPath))
         {
             dialog.InitialDirectory = currentPath;
+        }
+        else if (TryGetExistingDirectory(CurrentRootDirectory, out var rootDirectory))
+        {
+            dialog.InitialDirectory = rootDirectory;
         }
 
         if (dialog.ShowDialog() == true)
@@ -886,6 +989,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         SyncToProject();
         var messages = validator.Validate(project, projectPath);
         CanRender = !ProjectValidator.HasErrors(messages);
+        if (!CanRender)
+        {
+            CurrentPreviewPlan = null;
+        }
+
         var errors = messages.Count(m => m.Severity == ValidationSeverity.Error);
         var warnings = messages.Count(m => m.Severity == ValidationSeverity.Warning);
         Status = errors == 0 ? $"Valid with {warnings} warning(s)" : $"{errors} error(s), {warnings} warning(s)";
@@ -902,19 +1010,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         SyncToProject();
         try
         {
-            var image = new NetVipsImageInfoReader().Read(ProjectPaths.Resolve(project, project.Source.Image));
+            var source = EnsureSelectedSource();
+            var image = new NetVipsImageInfoReader().Read(ProjectPaths.Resolve(project, source.Image));
             var solver = new TransformSolver();
-            var initialResult = solver.Solve(project, image.Width, image.Height);
+            var initialResult = solver.Solve(source.Georeference, project.Render, image.Width, image.Height);
             var zoomRange = ZoomRangeCalculator.Resolve(project.Render, initialResult, image.Width, image.Height);
             if (useAutoZoomRange || ZoomRangeCalculator.UsesAutoZoom(project.Render))
             {
                 ApplyAutoZoomRange(zoomRange);
             }
 
-            var result = solver.Solve(project, image.Width, image.Height, zoomRange.MaxZoom);
+            var result = solver.Solve(source.Georeference, project.Render, image.Width, image.Height, zoomRange.MaxZoom);
             CurrentSolveResult = result;
             ApplyErrors(result);
-            CanRender = result.TransformType == "affine" && project.Georeference.ControlPoints.Count(p => p.Enabled) >= 3;
+            CanRender = !ProjectValidator.HasErrors(validator.Validate(project, projectPath));
+            RefreshPreviewPlan();
             RmsText = $"{result.RmsPixelsAtMaxZoom:0.##} px";
             MaxErrorText = $"{result.MaxPixelsAtMaxZoom:0.##} px";
             UpdateSolveFeedback(result, zoomRange);
@@ -926,6 +1036,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             CurrentSolveResult = null;
+            CurrentPreviewPlan = null;
             CanRender = false;
             ClearErrors();
             SetSolveFeedback("Unsolved", ex.Message, SolveErrorBrush);
@@ -938,6 +1049,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private async Task RenderAsync()
     {
         SyncToProject();
+        NormalizeOutputPathsForCurrentRoot();
+        EnsureProjectBaseDirectory();
         IsRendering = true;
         RenderPercent = 0;
         RenderSummaryText = "Rendering...";
@@ -981,7 +1094,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void OpenOutputFolder()
     {
-        var path = ProjectPaths.Resolve(project, project.Output.Directory);
+        NormalizeOutputPathsForCurrentRoot();
+        EnsureProjectBaseDirectory();
+        var path = ResolveOutputDirectory();
         Directory.CreateDirectory(path);
         AddRecentOutputDirectory(path);
         Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
@@ -1013,18 +1128,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private void RefreshFromProject()
     {
         useAutoZoomRange = ZoomRangeCalculator.UsesAutoZoom(project.Render);
-        ControlPoints.Clear();
-        foreach (var point in project.Georeference.ControlPoints)
+        usesExplicitSources = ProjectSources.HasExplicitSources(project);
+        Sources.Clear();
+        foreach (var source in ProjectSources.GetEffectiveSources(project))
         {
-            ControlPoints.Add(ControlPointViewModel.FromConfig(point));
+            Sources.Add(ProjectSourceViewModel.FromConfig(source));
         }
+
+        SelectedSource = Sources.FirstOrDefault();
 
         OnPropertyChanged(nameof(ProjectName));
         OnPropertyChanged(nameof(SourceImage));
+        OnPropertyChanged(nameof(SelectedSourceName));
+        OnPropertyChanged(nameof(CanRemoveSelectedSource));
         OnPropertyChanged(nameof(MinZoom));
         OnPropertyChanged(nameof(MaxZoom));
         OnPropertyChanged(nameof(Format));
         OnPropertyChanged(nameof(OutputDirectory));
+        OnPropertyChanged(nameof(RootStatusText));
         OnPropertyChanged(nameof(PreviewOpacity));
         OnPropertyChanged(nameof(CanPreview));
         OnPropertyChanged(nameof(TileSize));
@@ -1048,6 +1169,85 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    private void AddSource()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            CheckFileExists = true,
+            Filter = ImageFilter,
+            Title = "Add image"
+        };
+        ApplyInitialOpenDirectory(dialog, ResolveSourceImagePath());
+
+        if (dialog.ShowDialog() == true)
+        {
+            AddSourceImage(dialog.FileName);
+        }
+    }
+
+    private void AddSourceImage(string imagePath)
+    {
+        if (!IsSupportedSourceImageFile(imagePath))
+        {
+            Status = $"Unsupported image: {Path.GetFileName(imagePath)}";
+            return;
+        }
+
+        RememberOpenDirectory(imagePath);
+        AddRecentImage(imagePath);
+        EnsureProjectRootForPath(imagePath);
+        if (Sources.Count == 0
+            || (Sources.Count == 1
+                && string.IsNullOrWhiteSpace(Sources[0].Image)
+                && Sources[0].Georeference.ControlPoints.Count == 0))
+        {
+            SelectedSource = Sources.FirstOrDefault() ?? EnsureSelectedSource();
+            SetSourceImage(imagePath);
+            Status = $"Added image: {Path.GetFileName(imagePath)}";
+            return;
+        }
+
+        SyncToProject();
+        usesExplicitSources = true;
+        var nextNumber = Sources
+            .Select(source => ParseTrailingNumber(source.Id))
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+        var source = new ProjectSourceViewModel
+        {
+            Id = $"source-{nextNumber}",
+            Name = Path.GetFileNameWithoutExtension(imagePath),
+            Image = CreateProjectPathForSourceImage(imagePath),
+            Enabled = true,
+            Georeference = new GeoreferenceConfig()
+        };
+        Sources.Add(source);
+        SelectedSource = source;
+        ResetAutoZoomRange();
+        CurrentSolveResult = null;
+        CurrentPreviewPlan = null;
+        RmsText = "n/a";
+        MaxErrorText = "n/a";
+        Validate();
+        Status = $"Added image: {Path.GetFileName(imagePath)}";
+    }
+
+    private void RemoveSelectedSource()
+    {
+        if (SelectedSource is null || Sources.Count <= 1)
+        {
+            return;
+        }
+
+        var index = Sources.IndexOf(SelectedSource);
+        var removedName = SelectedSource.DisplayName;
+        Sources.Remove(SelectedSource);
+        SelectedSource = Sources[Math.Clamp(index, 0, Sources.Count - 1)];
+        usesExplicitSources = Sources.Count > 1;
+        Status = $"Removed {removedName}";
+        ValidateAndSolve();
+    }
+
     private void ResetAutoZoomRange()
     {
         useAutoZoomRange = true;
@@ -1066,7 +1266,70 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void SyncToProject()
     {
-        project.Georeference.ControlPoints = ControlPoints.Select(p => p.ToConfig()).ToList();
+        SyncSelectedSourceControlPoints();
+        var source = Sources.FirstOrDefault();
+        if (usesExplicitSources || Sources.Count > 1 || (source is not null && HasNonDefaultOpacity(source)))
+        {
+            usesExplicitSources = true;
+            project.Sources = Sources.Select(source => source.ToConfig()).ToList();
+            return;
+        }
+
+        if (source is null)
+        {
+            return;
+        }
+
+        project.Sources = null;
+        project.Source.Image = source.Image;
+        project.Source.Origin = source.Origin;
+        project.Source.Units = source.Units;
+        project.Georeference = source.Georeference;
+    }
+
+    private void SyncSelectedSourceControlPoints()
+    {
+        if (SelectedSource is null)
+        {
+            return;
+        }
+
+        SelectedSource.Georeference.ControlPoints = ControlPoints.Select(point => point.ToConfig()).ToList();
+    }
+
+    private void LoadControlPointsFromSelectedSource()
+    {
+        isLoadingControlPoints = true;
+        try
+        {
+            ControlPoints.Clear();
+            if (SelectedSource is not { } source)
+            {
+                return;
+            }
+
+            foreach (var point in source.Georeference.ControlPoints)
+            {
+                ControlPoints.Add(ControlPointViewModel.FromConfig(point));
+            }
+        }
+        finally
+        {
+            isLoadingControlPoints = false;
+        }
+    }
+
+    private ProjectSourceViewModel EnsureSelectedSource()
+    {
+        if (SelectedSource is not null)
+        {
+            return SelectedSource;
+        }
+
+        var source = ProjectSourceViewModel.FromConfig(ProjectSources.CreateLegacySource(project));
+        Sources.Add(source);
+        SelectedSource = source;
+        return source;
     }
 
     private void ApplyErrors(TransformSolveResult result)
@@ -1102,7 +1365,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void UpdateSolveFeedback(TransformSolveResult result, ZoomRangeRecommendation zoomRange)
     {
-        var enabledPointCount = project.Georeference.ControlPoints.Count(p => p.Enabled);
+        var enabledPointCount = SelectedSource?.Georeference.ControlPoints.Count(p => p.Enabled)
+            ?? project.Georeference.ControlPoints.Count(p => p.Enabled);
         var zoomText = useAutoZoomRange ? $" Zoom {zoomRange.MinZoom}..{zoomRange.MaxZoom}." : "";
         if (result.TransformType == "similarity")
         {
@@ -1168,7 +1432,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void ControlPointsOnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        MarkDirty();
+        if (!isLoadingControlPoints)
+        {
+            MarkDirty();
+        }
 
         if (e.OldItems is not null)
         {
@@ -1227,12 +1494,125 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         Solve();
     }
 
+    private void RefreshPreviewPlan()
+    {
+        try
+        {
+            CurrentPreviewPlan = new ProjectRenderPlanner().CreatePlan(project);
+        }
+        catch
+        {
+            CurrentPreviewPlan = null;
+        }
+    }
+
+    private void RefreshPreviewSourceMetadata()
+    {
+        if (CurrentPreviewPlan is null)
+        {
+            return;
+        }
+
+        var enabledSources = ProjectSources.GetEnabledSources(project);
+        var updatedSources = CurrentPreviewPlan.Sources
+            .Select(source =>
+            {
+                var updatedSource = enabledSources.FirstOrDefault(candidate => SourceMatches(source.Source, candidate));
+                return updatedSource is null ? source : source with { Source = updatedSource };
+            })
+            .ToList();
+        CurrentPreviewPlan = CurrentPreviewPlan with { Sources = updatedSources };
+    }
+
+    private static bool SourceMatches(ProjectSourceConfig current, ProjectSourceConfig candidate)
+    {
+        if (!string.IsNullOrWhiteSpace(current.Id)
+            && !string.IsNullOrWhiteSpace(candidate.Id)
+            && string.Equals(current.Id, candidate.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(current.Image, candidate.Image, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasNonDefaultOpacity(ProjectSourceViewModel source) => Math.Abs(source.Opacity - 1.0) > 0.0000001;
+
     private void MarkDirty()
     {
         if (!suppressDirtyTracking)
         {
             HasUnsavedChanges = true;
         }
+    }
+
+    private void SourcesOnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        MarkDirty();
+
+        if (e.OldItems is not null)
+        {
+            foreach (ProjectSourceViewModel source in e.OldItems)
+            {
+                if (sourceHandlers.Remove(source, out var handler))
+                {
+                    source.PropertyChanged -= handler;
+                }
+            }
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (ProjectSourceViewModel source in e.NewItems)
+            {
+                SubscribeSource(source);
+            }
+        }
+
+        OnPropertyChanged(nameof(CanRemoveSelectedSource));
+        removeSourceCommand.RaiseCanExecuteChanged();
+    }
+
+    private void SubscribeSource(ProjectSourceViewModel source)
+    {
+        if (sourceHandlers.ContainsKey(source))
+        {
+            return;
+        }
+
+        PropertyChangedEventHandler handler = (_, e) =>
+        {
+            MarkDirty();
+            if (ReferenceEquals(source, SelectedSource))
+            {
+                OnPropertyChanged(nameof(SourceImage));
+                OnPropertyChanged(nameof(SelectedSourceName));
+                OnPropertyChanged(nameof(CanPreview));
+                DisablePreviewIfUnavailable();
+            }
+
+            if (e.PropertyName is nameof(ProjectSourceViewModel.Opacity))
+            {
+                Validate();
+                if (CanRender)
+                {
+                    RefreshPreviewSourceMetadata();
+                }
+
+                return;
+            }
+
+            if (e.PropertyName is nameof(ProjectSourceViewModel.Enabled)
+                or nameof(ProjectSourceViewModel.Image)
+                or nameof(ProjectSourceViewModel.Name)
+                or nameof(ProjectSourceViewModel.Id))
+            {
+                ValidateAndSolve();
+            }
+        };
+
+        source.PropertyChanged += handler;
+        sourceHandlers[source] = handler;
     }
 
     private void MarkClean() => HasUnsavedChanges = false;
@@ -1263,12 +1643,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         if (!IsSupportedSourceImageFile(imagePath))
         {
-            Status = $"Unsupported source image: {Path.GetFileName(imagePath)}";
+            Status = $"Unsupported image: {Path.GetFileName(imagePath)}";
             return;
         }
 
         RememberOpenDirectory(imagePath);
         AddRecentImage(imagePath);
+        EnsureProjectRootForPath(imagePath);
         SourceImage = CreateProjectPathForSourceImage(imagePath);
         ResetAutoZoomRange();
         if (string.IsNullOrWhiteSpace(ProjectName) || ProjectName == "QTiles project")
@@ -1277,6 +1658,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
 
         CurrentSolveResult = null;
+        CurrentPreviewPlan = null;
         RmsText = "n/a";
         MaxErrorText = "n/a";
         Validate();
@@ -1290,13 +1672,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             SetSolveFeedback("Add control points", "Pair enough image and world markers to solve the transform.", SolveNeutralBrush);
         }
 
-        Status = $"Source image set: {Path.GetFileName(imagePath)}";
+        Status = $"Selected image set: {Path.GetFileName(imagePath)}";
     }
 
     private bool CanAttemptSolve()
     {
         var enabledPoints = ControlPoints.Count(p => p.Enabled);
-        var transformType = project.Georeference.Transform.Type.Trim().ToLowerInvariant();
+        var transformType = (SelectedSource?.Georeference ?? project.Georeference).Transform.Type.Trim().ToLowerInvariant();
         return transformType == "similarity" ? enabledPoints >= 2 : enabledPoints >= 3;
     }
 
@@ -1308,16 +1690,126 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private string CreateProjectPathForProject(string path)
     {
-        var directory = ProjectDirectory;
-        if (string.IsNullOrWhiteSpace(directory))
+        return ProjectPathFormatter.FormatForProject(CurrentRootDirectory, path);
+    }
+
+    private void RebaseProjectPaths(string? oldRootDirectory, string newRootDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(oldRootDirectory))
+        {
+            return;
+        }
+
+        if (project.Sources is { Count: > 0 })
+        {
+            foreach (var source in project.Sources)
+            {
+                source.Image = RebaseProjectPath(source.Image, oldRootDirectory, newRootDirectory);
+            }
+        }
+        else
+        {
+            project.Source.Image = RebaseProjectPath(project.Source.Image, oldRootDirectory, newRootDirectory);
+        }
+
+        project.Output.Directory = RebaseProjectPath(project.Output.Directory, oldRootDirectory, newRootDirectory);
+        project.Output.TileJsonPath = RebaseProjectPath(project.Output.TileJsonPath, oldRootDirectory, newRootDirectory);
+    }
+
+    private string? ProjectDirectory => projectPath is { Length: > 0 }
+        ? Path.GetDirectoryName(Path.GetFullPath(projectPath))
+        : null;
+
+    private string? CurrentRootDirectory =>
+        ProjectDirectory
+        ?? project.BaseDirectory
+        ?? GetFirstSourceDirectory();
+
+    private string? GetFirstSourceDirectory()
+    {
+        var sourcePath = Sources.Select(source => source.Image)
+            .Concat([project.Source.Image])
+            .FirstOrDefault(Path.IsPathRooted);
+
+        return TryGetDirectoryForPath(sourcePath, out var directory) ? directory : null;
+    }
+
+    private string ResolveProjectPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path))
+        {
+            return path;
+        }
+
+        var root = CurrentRootDirectory;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return Path.GetFullPath(path);
+        }
+
+        return Path.GetFullPath(Path.Combine(root, path));
+    }
+
+    private void EnsureProjectRootForPath(string path)
+    {
+        if (!string.IsNullOrWhiteSpace(CurrentRootDirectory)
+            || !TryGetDirectoryForPath(path, out var directory))
+        {
+            return;
+        }
+
+        project.BaseDirectory = directory;
+        OnPropertyChanged(nameof(RootStatusText));
+    }
+
+    private void EnsureProjectBaseDirectory()
+    {
+        if (!string.IsNullOrWhiteSpace(project.BaseDirectory))
+        {
+            return;
+        }
+
+        project.BaseDirectory = CurrentRootDirectory;
+        OnPropertyChanged(nameof(RootStatusText));
+    }
+
+    private void NormalizeOutputPathsForCurrentRoot()
+    {
+        var root = CurrentRootDirectory;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return;
+        }
+
+        var outputDirectory = ProjectPathFormatter.FormatForProject(root, ResolveProjectPath(project.Output.Directory));
+        if (!string.Equals(project.Output.Directory, outputDirectory, StringComparison.Ordinal))
+        {
+            project.Output.Directory = outputDirectory;
+            MarkDirty();
+            OnPropertyChanged(nameof(OutputDirectory));
+        }
+
+        var tileJsonPath = ProjectPathFormatter.FormatForProject(root, ResolveProjectPath(project.Output.TileJsonPath));
+        if (!string.Equals(project.Output.TileJsonPath, tileJsonPath, StringComparison.Ordinal))
+        {
+            project.Output.TileJsonPath = tileJsonPath;
+            MarkDirty();
+        }
+    }
+
+    private static string RebaseProjectPath(string path, string oldRootDirectory, string newRootDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(path))
         {
             return path;
         }
 
         try
         {
-            var relative = Path.GetRelativePath(directory, path);
-            return NormalizeProjectPath(relative);
+            var absolutePath = Path.IsPathRooted(path)
+                ? Path.GetFullPath(path)
+                : Path.GetFullPath(Path.Combine(oldRootDirectory, path));
+            return ProjectPathFormatter.FormatForProject(newRootDirectory, absolutePath);
         }
         catch
         {
@@ -1325,25 +1817,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    private void RebaseSourceImagePathForProject()
+    private void ApplyProjectPathsToViewModels()
     {
-        if (projectPath is null || string.IsNullOrWhiteSpace(project.Source.Image))
+        if (project.Sources is { Count: > 0 })
         {
+            for (var i = 0; i < Sources.Count && i < project.Sources.Count; i++)
+            {
+                Sources[i].Image = project.Sources[i].Image;
+            }
+
             return;
         }
 
-        var sourcePath = ResolveSourceImagePath();
-        if (!Path.IsPathRooted(sourcePath))
+        if (Sources.FirstOrDefault() is { } source)
         {
-            return;
+            source.Image = project.Source.Image;
         }
-
-        SourceImage = CreateProjectPathForSourceImage(sourcePath);
     }
-
-    private string? ProjectDirectory => projectPath is { Length: > 0 }
-        ? Path.GetDirectoryName(Path.GetFullPath(projectPath))
-        : project.BaseDirectory;
 
     private static bool IsProjectFile(string path)
     {
@@ -1505,6 +1995,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private static bool HasPath(string? path) => !string.IsNullOrWhiteSpace(path);
 
+    private static int ParseTrailingNumber(string value)
+    {
+        var digits = new string(value.Reverse().TakeWhile(char.IsDigit).Reverse().ToArray());
+        return int.TryParse(digits, out var number) ? number : 0;
+    }
+
     private static bool TryGetDirectoryForPath(string? path, out string directory)
     {
         directory = string.Empty;
@@ -1576,19 +2072,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string NormalizeProjectPath(string path)
-    {
-        var isRooted = Path.IsPathRooted(path);
-        var normalized = path.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
-        if (!isRooted
-            && !normalized.StartsWith("./", StringComparison.Ordinal)
-            && !normalized.StartsWith("../", StringComparison.Ordinal))
-        {
-            normalized = $"./{normalized}";
-        }
-
-        return normalized;
-    }
 }
 
 public sealed class RecentFileViewModel

@@ -73,6 +73,32 @@ public sealed class CliTests
         Assert.IsTrue(File.Exists(project.Output.TileJsonPath));
     }
 
+    [TestMethod]
+    public async Task Cli_Render_MultipleSources_WritesTiles()
+    {
+        using var temp = new TempFolder();
+        var first = Path.Combine(temp.Path, "first.png");
+        var second = Path.Combine(temp.Path, "second.png");
+        WriteRgbSource(first);
+        WriteRgbSource(second);
+        var yaml = Path.Combine(temp.Path, "qtiles.yaml");
+        var project = SolvableMultiSourceProject(first, second);
+        project.Render.TileSize = 2;
+        project.Render.AutoZoom = false;
+        project.Render.MinZoom = 0;
+        project.Render.MaxZoom = 0;
+        project.Render.Resampling = "nearest";
+        project.Output.Directory = Path.Combine(temp.Path, "tiles");
+        project.Output.TileJsonPath = Path.Combine(temp.Path, "tiles", "tilejson.json");
+        await new QTilesYamlSerializer().WriteAsync(project, yaml);
+
+        var exitCode = await CliApplication.RunAsync(["render", yaml], CancellationToken.None);
+
+        Assert.AreEqual(0, exitCode);
+        Assert.IsTrue(File.Exists(Path.Combine(project.Output.Directory, "0", "0", "0.png")));
+        Assert.IsTrue(File.Exists(project.Output.TileJsonPath));
+    }
+
     private static QTilesProject SolvableProject(string image) => new()
     {
         Source = new SourceConfig { Image = image },
@@ -85,6 +111,35 @@ public sealed class CliTests
                 NormalizedPoint("3", 0, 2, 0.49, 0.51)
             ]
         }
+    };
+
+    private static QTilesProject SolvableMultiSourceProject(string first, string second) => new()
+    {
+        Sources =
+        [
+            new ProjectSourceConfig
+            {
+                Id = "first",
+                Image = first,
+                Georeference = SolvableGeoreference()
+            },
+            new ProjectSourceConfig
+            {
+                Id = "second",
+                Image = second,
+                Georeference = SolvableGeoreference()
+            }
+        ]
+    };
+
+    private static GeoreferenceConfig SolvableGeoreference() => new()
+    {
+        ControlPoints =
+        [
+            NormalizedPoint("1", 0, 0, 0.49, 0.49),
+            NormalizedPoint("2", 2, 0, 0.51, 0.49),
+            NormalizedPoint("3", 0, 2, 0.49, 0.51)
+        ]
     };
 
     private static Task CreateImageAsync(string path) => File.WriteAllBytesAsync(path, Convert.FromBase64String(

@@ -109,6 +109,32 @@ public sealed class PreviewTileService
             new RenderedTileRequest(sourceImagePath, transform, tile, tileSize, options));
     }
 
+    public PreviewTileWorkItem CreateWorkItem(ProjectRenderPlan renderPlan, TileCoord tile, int tileSize)
+    {
+        tileSize = Math.Max(1, tileSize);
+        var sources = renderPlan.Sources
+            .Where(source => SourceContributesToTile(source, tile))
+            .ToList();
+        var requestSources = sources
+            .Select(source => new RenderedTileSource(source.SourceImagePath, source.RenderTransform, source.Source.Opacity))
+            .ToList();
+        var latestSourceTicks = sources
+            .Select(source => File.GetLastWriteTimeUtc(source.SourceImagePath).Ticks)
+            .DefaultIfEmpty(0)
+            .Max();
+        var key = new PreviewTileKey(
+            "merged",
+            latestSourceTicks,
+            CreateSourcesFingerprint(sources),
+            tileSize,
+            tile.Z,
+            tile.X,
+            tile.Y);
+        return new PreviewTileWorkItem(
+            key,
+            new RenderedTileRequest(requestSources, tile, tileSize, CreateOptions()));
+    }
+
     public async Task<RenderedTileImage?> RenderAsync(PreviewTileWorkItem workItem, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -146,6 +172,34 @@ public sealed class PreviewTileService
         WebMercatorWorldWidth / (tileSize * Math.Pow(2.0, zoom));
 
     private static int ClampTile(int tile, int maxTile) => Math.Clamp(tile, 0, Math.Max(0, maxTile));
+
+    private static TileRenderOptions CreateOptions() => new(
+        "png",
+        80,
+        Overwrite: true,
+        SkipEmptyTiles: true,
+        RenderResampling.Bilinear,
+        "transparent");
+
+    private static bool SourceContributesToTile(RenderSourceContext source, TileCoord tile)
+    {
+        var range = TileMath.BoundsToTileRange(source.SolveResult.Bounds, tile.Z);
+        return tile.X >= range.MinX
+            && tile.X <= range.MaxX
+            && tile.Y >= range.MinY
+            && tile.Y <= range.MaxY;
+    }
+
+    private static string CreateSourcesFingerprint(IReadOnlyList<RenderSourceContext> sources) =>
+        string.Join(
+            ";",
+            sources.Select(source =>
+            {
+                var ticks = File.GetLastWriteTimeUtc(source.SourceImagePath).Ticks;
+                return string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{source.Source.Id}|{source.SourceImagePath}|{ticks}|{source.Source.Opacity:R}|{CreateTransformFingerprint(source.RenderTransform)}");
+            }));
 
     private static string CreateTransformFingerprint(AffineTransform transform)
         => string.Create(

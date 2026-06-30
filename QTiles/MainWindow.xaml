@@ -574,7 +574,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button Command="{Binding OpenCommand}"
-                                ToolTip="Open a QTiles YAML project or choose a source image"
+                                ToolTip="Open a QTiles YAML project or choose an image"
                                 Margin="0">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE8E5;" Style="{StaticResource ButtonIcon}" />
@@ -604,7 +604,25 @@
 
         <Border DockPanel.Dock="Bottom" Background="#111419" BorderBrush="#343B45" BorderThickness="0,1,0,0">
             <Grid Height="42" Margin="14,0">
-                <TextBlock Text="{Binding Status}" Foreground="{StaticResource TextStrong}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" MaxWidth="520" />
+                    <ColumnDefinition Width="18" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding RootStatusText}"
+                           Foreground="{StaticResource TextMuted}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1"
+                           Text="|"
+                           Foreground="#4C5663"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2"
+                           Text="{Binding Status}"
+                           Foreground="{StaticResource TextStrong}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
             </Grid>
         </Border>
 
@@ -669,13 +687,13 @@
                     <Border Background="{StaticResource SurfaceRaised}" BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,0,0,1" Padding="14,8">
                         <Grid>
                             <StackPanel Margin="0,0,246,0">
-                                <TextBlock Text="Source image" Style="{StaticResource PaneTitle}" />
+                                <TextBlock Text="{Binding SelectedSourceName}" Style="{StaticResource PaneTitle}" />
                                 <TextBlock Text="{Binding SourceImage}" Style="{StaticResource PaneCaption}" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                 <CheckBox Content="Sync"
                                           IsChecked="{Binding IsViewSyncEnabled}"
-                                          ToolTip="Keep the source image and world map viewports synced"
+                                          ToolTip="Keep the image and world map viewports synced"
                                           Margin="0,0,10,0" />
                                 <Button Style="{StaticResource CompactButton}" Click="ImageFit_Click" ToolTip="Fit image">
                                     <TextBlock Text="&#xE9A6;" Style="{StaticResource CompactButtonIcon}" />
@@ -746,7 +764,60 @@
                         <TextBlock Text="Name" Style="{StaticResource FieldLabel}" />
                         <TextBox Text="{Binding ProjectName, UpdateSourceTrigger=PropertyChanged}" />
 
-                        <TextBlock Text="Source image" Style="{StaticResource FieldLabel}" />
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Images" Style="{StaticResource FieldLabel}" Margin="0" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button Style="{StaticResource FieldIconButton}"
+                                        Command="{Binding AddSourceCommand}"
+                                        ToolTip="Add image"
+                                        Margin="0">
+                                    <TextBlock Text="&#xE710;" Style="{StaticResource CompactButtonIcon}" />
+                                </Button>
+                                <Button Style="{StaticResource FieldIconButton}"
+                                        Command="{Binding RemoveSourceCommand}"
+                                        ToolTip="Remove selected image"
+                                        Margin="4,0,0,0">
+                                    <TextBlock Text="&#xE74D;" Style="{StaticResource CompactButtonIcon}" />
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                        <ListBox ItemsSource="{Binding Sources}"
+                                 SelectedItem="{Binding SelectedSource}"
+                                 MaxHeight="142"
+                                 Margin="0,6,0,10"
+                                 Background="#15191F"
+                                 BorderBrush="#38404B"
+                                 Foreground="{StaticResource TextStrong}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  VerticalAlignment="Center"
+                                                  Margin="0,0,8,0" />
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="{Binding DisplayName}"
+                                                       Foreground="{StaticResource TextStrong}"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Summary}"
+                                                       Foreground="{StaticResource TextMuted}"
+                                                       FontSize="11"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <TextBlock Text="Selected image path" Style="{StaticResource FieldLabel}" />
                         <Grid AllowDrop="True"
                               PreviewDragOver="SourceImageDropTarget_PreviewDragOver"
                               PreviewDrop="SourceImageDropTarget_Drop">
@@ -766,7 +837,7 @@
                                 </Grid.ColumnDefinitions>
                                 <Button Style="{StaticResource FieldIconButton}"
                                         Command="{Binding ChooseSourceImageCommand}"
-                                        ToolTip="Choose source image">
+                                        ToolTip="Choose image">
                                     <TextBlock Text="&#xEB9F;" Style="{StaticResource CompactButtonIcon}" />
                                 </Button>
                                 <Button Grid.Column="1"
@@ -782,6 +853,26 @@
                                 </Button>
                             </Grid>
                         </Grid>
+
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Selected image opacity" Style="{StaticResource FieldLabel}" Margin="0" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding SelectedSource.OpacityPercentText}"
+                                       Foreground="{StaticResource TextMuted}"
+                                       FontSize="12"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+                        <Slider Minimum="0"
+                                Maximum="1"
+                                TickFrequency="0.05"
+                                SmallChange="0.05"
+                                LargeChange="0.1"
+                                IsSnapToTickEnabled="False"
+                                Value="{Binding SelectedSource.Opacity, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
                         <TextBlock Text="Output directory" Style="{StaticResource FieldLabel}" />
                         <Grid>

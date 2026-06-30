@@ -3,6 +3,7 @@ using QTiles.Core.Geo;
 using QTiles.Core.Imaging;
 using QTiles.Core.Rendering;
 using QTiles.Core.Transforms;
+using QTiles.Core.Validation;
 using NetVips;
 
 namespace QTiles.Tests;
@@ -178,6 +179,190 @@ public sealed class YamlTests
         Assert.IsTrue(roundTrip.Georeference.ControlPoints[0].Locked is true);
         Assert.IsNull(roundTrip.Georeference.ControlPoints[1].Locked);
     }
+
+    [TestMethod]
+    public void Yaml_RoundTrip_MultipleSources_PreservesOrderAndPoints()
+    {
+        var project = new QTilesProject
+        {
+            Sources =
+            [
+                new ProjectSourceConfig
+                {
+                    Id = "sheet-a",
+                    Image = "./a.png",
+                    Georeference = new GeoreferenceConfig
+                    {
+                        ControlPoints = [new ControlPointConfig { Id = new ControlPointId("a1") }]
+                    }
+                },
+                new ProjectSourceConfig
+                {
+                    Id = "sheet-b",
+                    Image = "./b.png",
+                    Georeference = new GeoreferenceConfig
+                    {
+                        ControlPoints = [new ControlPointConfig { Id = new ControlPointId("b1") }]
+                    }
+                }
+            ]
+        };
+
+        var yaml = new QTilesYamlSerializer().Serialize(project);
+        var roundTrip = new QTilesYamlSerializer().Deserialize(yaml);
+
+        StringAssert.Contains(yaml, "sources:");
+        Assert.IsNotNull(roundTrip.Sources);
+        Assert.AreEqual("sheet-a", roundTrip.Sources[0].Id);
+        Assert.AreEqual("sheet-b", roundTrip.Sources[1].Id);
+        Assert.AreEqual("b1", roundTrip.Sources[1].Georeference.ControlPoints[0].Id.Value);
+    }
+
+    [TestMethod]
+    public void Yaml_RoundTrip_SourceOpacity_PreservesNonDefaultAndOmitsDefault()
+    {
+        var project = new QTilesProject
+        {
+            Sources =
+            [
+                new ProjectSourceConfig { Id = "full", Image = "./full.png" },
+                new ProjectSourceConfig { Id = "half", Image = "./half.png", Opacity = 0.5 }
+            ]
+        };
+
+        var yaml = new QTilesYamlSerializer().Serialize(project);
+        var roundTrip = new QTilesYamlSerializer().Deserialize(yaml);
+
+        StringAssert.Contains(yaml, "opacity: 0.5");
+        Assert.IsFalse(yaml.Contains("opacity: 1", StringComparison.Ordinal));
+        Assert.IsNotNull(roundTrip.Sources);
+        Assert.AreEqual(1.0, roundTrip.Sources[0].Opacity, 0.000001);
+        Assert.AreEqual(0.5, roundTrip.Sources[1].Opacity, 0.000001);
+    }
+
+    [TestMethod]
+    public void ProjectPathFormatter_UsesRelativePathForSubdirectory()
+    {
+        using var temp = new YamlTempFolder();
+        var root = Path.Combine(temp.Path, "project");
+        var output = Path.Combine(root, "tiles2");
+        Directory.CreateDirectory(root);
+
+        var formatted = ProjectPathFormatter.FormatForProject(root, output);
+
+        Assert.AreEqual("./tiles2", formatted);
+    }
+
+    [TestMethod]
+    public void ProjectPathFormatter_UsesAbsolutePathOutsideProjectRoot()
+    {
+        using var temp = new YamlTempFolder();
+        var root = Path.Combine(temp.Path, "project");
+        var output = Path.Combine(temp.Path, "tiles2");
+        Directory.CreateDirectory(root);
+
+        var formatted = ProjectPathFormatter.FormatForProject(root, output);
+
+        Assert.AreEqual(Path.GetFullPath(output), formatted);
+        Assert.IsFalse(formatted.Contains("..", StringComparison.Ordinal));
+    }
+
+    private sealed class YamlTempFolder : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"qtiles-yaml-{Guid.NewGuid():N}");
+        public YamlTempFolder() => Directory.CreateDirectory(Path);
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+}
+
+[TestClass]
+public sealed class ValidationTests
+{
+    [TestMethod]
+    public void Validator_MultipleSources_RequiresUniqueIdsButIgnoresDisabledMissingImages()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        File.WriteAllText(source, "placeholder");
+        var project = new QTilesProject
+        {
+            BaseDirectory = temp.Path,
+            Sources =
+            [
+                new ProjectSourceConfig
+                {
+                    Id = "sheet",
+                    Image = source,
+                    Georeference = ValidGeoreference()
+                },
+                new ProjectSourceConfig
+                {
+                    Id = "sheet",
+                    Image = "./missing.png",
+                    Enabled = false
+                }
+            ]
+        };
+
+        var messages = new ProjectValidator().Validate(project);
+
+        Assert.IsTrue(messages.Any(message => message.Code == "source-id-duplicate"));
+        Assert.IsFalse(messages.Any(message => message.Code == "source-image-missing"));
+    }
+
+    [TestMethod]
+    public void Validator_SourceOpacity_MustBeBetweenZeroAndOne()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        File.WriteAllText(source, "placeholder");
+        var project = new QTilesProject
+        {
+            BaseDirectory = temp.Path,
+            Sources =
+            [
+                new ProjectSourceConfig
+                {
+                    Id = "sheet",
+                    Image = source,
+                    Opacity = 1.2,
+                    Georeference = ValidGeoreference()
+                }
+            ]
+        };
+
+        var messages = new ProjectValidator().Validate(project);
+
+        Assert.IsTrue(messages.Any(message => message.Code == "source-opacity"));
+    }
+
+    private static GeoreferenceConfig ValidGeoreference() => new()
+    {
+        ControlPoints =
+        [
+            NormalizedPoint("1", 0, 0, 0.49, 0.49),
+            NormalizedPoint("2", 10, 0, 0.51, 0.49),
+            NormalizedPoint("3", 0, 10, 0.49, 0.51)
+        ]
+    };
+
+    private static ControlPointConfig NormalizedPoint(string id, double x, double y, double u, double v)
+    {
+        var lonLat = WebMercator.NormalizedToLonLat(u, v);
+        return new ControlPointConfig
+        {
+            Id = new ControlPointId(id),
+            Image = new ImagePoint { X = x, Y = y },
+            World = new WorldPoint { Lon = lonLat.Lon, Lat = lonLat.Lat }
+        };
+    }
+
+    private sealed class TempFolder : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"qtiles-validation-{Guid.NewGuid():N}");
+        public TempFolder() => Directory.CreateDirectory(Path);
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
 }
 
 [TestClass]
@@ -229,6 +414,47 @@ public sealed class RendererTests
         TestAssert.InRange(pixel[0], 85, 95);
         TestAssert.InRange(pixel[1], 5, 15);
         TestAssert.InRange(pixel[2], 195, 205);
+        TestAssert.InRange(pixel[3], 250, 255);
+    }
+
+    [TestMethod]
+    public async Task Renderer_MultipleSources_CompositesLaterSourceOverEarlierSource()
+    {
+        using var temp = new TempFolder();
+        var red = Path.Combine(temp.Path, "red.png");
+        var blue = Path.Combine(temp.Path, "blue.png");
+        WriteRgbaSource(red, 1, 1, [255, 0, 0, 255]);
+        WriteRgbaSource(blue, 1, 1, [0, 0, 255, 255]);
+        var project = MultiSourceFullWorldProject(red, blue, temp.Path);
+
+        await new TileRenderer().RenderAsync(project, null, CancellationToken.None);
+
+        using var rendered = Image.NewFromFile(Path.Combine(temp.Path, "0", "0", "0.png"));
+        var pixel = rendered.Getpoint(0, 0);
+        TestAssert.InRange(pixel[0], 0, 5);
+        TestAssert.InRange(pixel[1], 0, 5);
+        TestAssert.InRange(pixel[2], 250, 255);
+        TestAssert.InRange(pixel[3], 250, 255);
+    }
+
+    [TestMethod]
+    public async Task Renderer_MultipleSources_BlendsLaterSourceByOpacity()
+    {
+        using var temp = new TempFolder();
+        var red = Path.Combine(temp.Path, "red.png");
+        var blue = Path.Combine(temp.Path, "blue.png");
+        WriteRgbaSource(red, 1, 1, [255, 0, 0, 255]);
+        WriteRgbaSource(blue, 1, 1, [0, 0, 255, 255]);
+        var project = MultiSourceFullWorldProject(red, blue, temp.Path);
+        project.Sources![1].Opacity = 0.5;
+
+        await new TileRenderer().RenderAsync(project, null, CancellationToken.None);
+
+        using var rendered = Image.NewFromFile(Path.Combine(temp.Path, "0", "0", "0.png"));
+        var pixel = rendered.Getpoint(0, 0);
+        TestAssert.InRange(pixel[0], 120, 135);
+        TestAssert.InRange(pixel[1], 0, 5);
+        TestAssert.InRange(pixel[2], 120, 135);
         TestAssert.InRange(pixel[3], 250, 255);
     }
 
@@ -400,6 +626,38 @@ public sealed class RendererTests
         }
     };
 
+    private static QTilesProject MultiSourceFullWorldProject(string firstSource, string secondSource, string output) => new()
+    {
+        Project = new ProjectInfo { Name = "Multi-source full world test" },
+        Sources =
+        [
+            new ProjectSourceConfig
+            {
+                Id = "red",
+                Image = firstSource,
+                Georeference = FullWorldGeoreference(1)
+            },
+            new ProjectSourceConfig
+            {
+                Id = "blue",
+                Image = secondSource,
+                Georeference = FullWorldGeoreference(1)
+            }
+        ],
+        Output = new OutputConfig { Directory = output, TileJson = true, TileJsonPath = Path.Combine(output, "tilejson.json") },
+        Render = new RenderConfig { AutoZoom = false, TileSize = 1, MinZoom = 0, MaxZoom = 0, Format = "png", Resampling = "nearest", SkipEmptyTiles = false }
+    };
+
+    private static GeoreferenceConfig FullWorldGeoreference(int imageSize) => new()
+    {
+        ControlPoints =
+        [
+            NormalizedPoint("1", 0, 0, 0, 0),
+            NormalizedPoint("2", imageSize, 0, 1, 0),
+            NormalizedPoint("3", 0, imageSize, 0, 1)
+        ]
+    };
+
     private static ControlPointConfig NormalizedPoint(string id, double x, double y, double u, double v)
     {
         var lonLat = WebMercator.NormalizedToLonLat(u, v);
@@ -538,6 +796,54 @@ public sealed class PreviewTileServiceTests
         Assert.IsTrue(workItem.RenderRequest.Options.SkipEmptyTiles);
         Assert.AreEqual(256, workItem.RenderRequest.TileSize);
     }
+
+    [TestMethod]
+    public void CreateWorkItem_ProjectRenderPlan_UsesAllContributingSources()
+    {
+        using var temp = new TempFolder();
+        var first = Path.Combine(temp.Path, "first.png");
+        var second = Path.Combine(temp.Path, "second.png");
+        File.WriteAllText(first, "first");
+        File.WriteAllText(second, "second");
+        var solve = IdentitySolveResult();
+        var plan = new ProjectRenderPlan(
+            [
+                new RenderSourceContext(
+                    new ProjectSourceConfig { Id = "first", Image = first },
+                    first,
+                    new ImageInfo(1, 1),
+                    solve,
+                    new AffineTransform(1, 0, 0, 0, 1, 0)),
+                new RenderSourceContext(
+                    new ProjectSourceConfig { Id = "second", Image = second, Opacity = 0.5 },
+                    second,
+                    new ImageInfo(1, 1),
+                    solve,
+                    new AffineTransform(1, 0, 0, 0, 1, 0))
+            ],
+            new ZoomRangeRecommendation(0, 0),
+            solve.Bounds,
+            0,
+            0);
+        var service = new PreviewTileService(new RecordingTileImageRenderer());
+
+        var workItem = service.CreateWorkItem(plan, new TileCoord(0, 0, 0), 256);
+
+        Assert.AreEqual("merged", workItem.Key.SourceImagePath);
+        Assert.AreEqual(2, workItem.RenderRequest.Sources.Count);
+        Assert.AreEqual(first, workItem.RenderRequest.Sources[0].SourceImagePath);
+        Assert.AreEqual(second, workItem.RenderRequest.Sources[1].SourceImagePath);
+        Assert.AreEqual(0.5, workItem.RenderRequest.Sources[1].Opacity, 0.000001);
+
+        var changedSources = plan.Sources.ToList();
+        changedSources[1] = changedSources[1] with
+        {
+            Source = new ProjectSourceConfig { Id = "second", Image = second, Opacity = 0.75 }
+        };
+        var changedWorkItem = service.CreateWorkItem(plan with { Sources = changedSources }, new TileCoord(0, 0, 0), 256);
+        Assert.AreNotEqual(workItem.Key, changedWorkItem.Key);
+    }
+
 
     [TestMethod]
     public async Task RenderAsync_CancelledBeforeDispatch_DoesNotInvokeRenderer()
