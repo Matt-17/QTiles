@@ -974,6 +974,28 @@
 
                         <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,12,0,0" Padding="12">
                             <StackPanel>
+                                <TextBlock Text="Preview" Foreground="{StaticResource TextStrong}" FontWeight="SemiBold" />
+                                <WrapPanel Margin="0,12,0,0">
+                                    <ToggleButton IsChecked="{Binding IsPreviewEnabled}"
+                                                  IsEnabled="{Binding CanPreview}"
+                                                  Style="{StaticResource PreviewToggleButton}"
+                                                  MinWidth="78"
+                                                  Margin="0,0,6,6">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE890;" Style="{StaticResource ButtonIcon}" />
+                                            <TextBlock Text="Preview" />
+                                        </StackPanel>
+                                    </ToggleButton>
+                                    <CheckBox Content="Limit tiles to zoom level"
+                                              IsChecked="{Binding LimitPreviewTilesToZoomLevel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              HorizontalAlignment="Left"
+                                              Margin="3,0,0,6" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,12,0,0" Padding="12">
+                            <StackPanel>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -1017,16 +1039,6 @@
                                             <TextBlock Text="Cancel" />
                                         </StackPanel>
                                     </Button>
-                                    <ToggleButton IsChecked="{Binding IsPreviewEnabled}"
-                                                  IsEnabled="{Binding CanPreview}"
-                                                  Style="{StaticResource PreviewToggleButton}"
-                                                  MinWidth="78"
-                                                  Margin="0,0,6,6">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE890;" Style="{StaticResource ButtonIcon}" />
-                                            <TextBlock Text="Preview" />
-                                        </StackPanel>
-                                    </ToggleButton>
                                     <Button Command="{Binding OpenOutputCommand}"
                                             MinWidth="78"
                                             Margin="0,0,0,6">

@@ -46,7 +46,8 @@ public sealed class PreviewTileService
         PreviewTileViewport viewport,
         int minZoom,
         int maxZoom,
-        int tileSize)
+        int tileSize,
+        bool limitToZoomRange = true)
     {
         if (!IsFinitePositive(viewport.Width)
             || !IsFinitePositive(viewport.Height)
@@ -56,13 +57,19 @@ public sealed class PreviewTileService
         }
 
         tileSize = Math.Max(1, tileSize);
-        var zoom = ViewportResolutionToZoom(viewport.Resolution, minZoom, maxZoom, tileSize);
-        var resolution = TileResolution(zoom, tileSize);
+        var zoom = ViewportResolutionToZoom(viewport.Resolution, minZoom, maxZoom, tileSize, limitToZoomRange);
+        if (zoom is null)
+        {
+            return [];
+        }
+
+        var zoomLevel = zoom.Value;
+        var resolution = TileResolution(zoomLevel, tileSize);
         var minWorldX = viewport.CenterX - viewport.Width * viewport.Resolution / 2.0;
         var maxWorldX = viewport.CenterX + viewport.Width * viewport.Resolution / 2.0;
         var minWorldY = viewport.CenterY - viewport.Height * viewport.Resolution / 2.0;
         var maxWorldY = viewport.CenterY + viewport.Height * viewport.Resolution / 2.0;
-        var maxTile = (int)Math.Min(int.MaxValue, Math.Pow(2.0, zoom) - 1.0);
+        var maxTile = (int)Math.Min(int.MaxValue, Math.Pow(2.0, zoomLevel) - 1.0);
         var minTileX = ClampTile((int)Math.Floor((minWorldX + WebMercatorHalfWorld) / (tileSize * resolution)), maxTile);
         var maxTileX = ClampTile((int)Math.Floor((maxWorldX + WebMercatorHalfWorld) / (tileSize * resolution)), maxTile);
         var minTileY = ClampTile((int)Math.Floor((WebMercatorHalfWorld - maxWorldY) / (tileSize * resolution)), maxTile);
@@ -73,7 +80,7 @@ public sealed class PreviewTileService
         {
             for (var y = minTileY; y <= maxTileY; y++)
             {
-                tiles.Add(new TileCoord(zoom, x, y));
+                tiles.Add(new TileCoord(zoomLevel, x, y));
             }
         }
 
@@ -162,10 +169,31 @@ public sealed class PreviewTileService
         return new PreviewTileWorldBounds(leftWorld, topWorld, rightWorld, bottomWorld);
     }
 
-    private static int ViewportResolutionToZoom(double resolution, int minZoom, int maxZoom, int tileSize)
+    private static int? ViewportResolutionToZoom(
+        double resolution,
+        int minZoom,
+        int maxZoom,
+        int tileSize,
+        bool limitToZoomRange)
     {
+        if (minZoom > maxZoom)
+        {
+            return null;
+        }
+
         var rawZoom = Math.Log(WebMercatorWorldWidth / (tileSize * resolution), 2.0);
-        return Math.Clamp((int)Math.Round(rawZoom), minZoom, maxZoom);
+        if (!double.IsFinite(rawZoom))
+        {
+            return null;
+        }
+
+        var roundedZoom = (int)Math.Round(rawZoom);
+        if (limitToZoomRange && (roundedZoom < minZoom || roundedZoom > maxZoom))
+        {
+            return null;
+        }
+
+        return Math.Clamp(roundedZoom, minZoom, maxZoom);
     }
 
     private static double TileResolution(int zoom, int tileSize) =>

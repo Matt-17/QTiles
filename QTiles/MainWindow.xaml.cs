@@ -393,7 +393,8 @@ public partial class MainWindow : Window
 
         if (e.PropertyName is nameof(MainWindowViewModel.TileSize)
             or nameof(MainWindowViewModel.MinZoom)
-            or nameof(MainWindowViewModel.MaxZoom))
+            or nameof(MainWindowViewModel.MaxZoom)
+            or nameof(MainWindowViewModel.LimitPreviewTilesToZoomLevel))
         {
             previewMissingStatusShown = false;
             ClearPreviewOverlay(clearBitmapCache: true);
@@ -766,7 +767,12 @@ public partial class MainWindow : Window
             activeViewport.Width,
             activeViewport.Height,
             activeViewport.Resolution);
-        var tiles = previewTileService.GetVisibleTiles(previewViewport, viewModel.MinZoom, viewModel.MaxZoom, tileSize);
+        var tiles = previewTileService.GetVisibleTiles(
+            previewViewport,
+            viewModel.MinZoom,
+            viewModel.MaxZoom,
+            tileSize,
+            viewModel.LimitPreviewTilesToZoomLevel);
         foreach (var tile in tiles)
         {
             try

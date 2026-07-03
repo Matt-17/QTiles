@@ -211,6 +211,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public double PreviewOpacity => project.Editor.Preview.Opacity;
 
+    public bool LimitPreviewTilesToZoomLevel
+    {
+        get => project.Editor.Preview.LimitTilesToZoomLevel;
+        set
+        {
+            if (project.Editor.Preview.LimitTilesToZoomLevel == value)
+            {
+                return;
+            }
+
+            project.Editor.Preview.LimitTilesToZoomLevel = value;
+            MarkDirty();
+            OnPropertyChanged();
+        }
+    }
+
     public int TileSize => project.Render.TileSize;
 
     public string RenderOptionsSummary =>
@@ -1147,6 +1163,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(OutputDirectory));
         OnPropertyChanged(nameof(RootStatusText));
         OnPropertyChanged(nameof(PreviewOpacity));
+        OnPropertyChanged(nameof(LimitPreviewTilesToZoomLevel));
         OnPropertyChanged(nameof(CanPreview));
         OnPropertyChanged(nameof(TileSize));
         OnPropertyChanged(nameof(RenderOptionsSummary));

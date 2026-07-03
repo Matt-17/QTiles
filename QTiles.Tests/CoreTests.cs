@@ -772,6 +772,66 @@ public sealed class PreviewTileServiceTests
     }
 
     [TestMethod]
+    public void GetVisibleTiles_ReturnsNoTilesOutsideConfiguredZoomRange()
+    {
+        var service = new PreviewTileService(new RecordingTileImageRenderer());
+        var belowMinResolution = WebMercatorWorldWidth / (256 * Math.Pow(2.0, 1));
+        var aboveMaxResolution = WebMercatorWorldWidth / (256 * Math.Pow(2.0, 5));
+
+        var belowMinTiles = service.GetVisibleTiles(
+            new PreviewTileViewport(0, 0, 256, 256, belowMinResolution),
+            minZoom: 2,
+            maxZoom: 4,
+            tileSize: 256);
+        var aboveMaxTiles = service.GetVisibleTiles(
+            new PreviewTileViewport(0, 0, 256, 256, aboveMaxResolution),
+            minZoom: 2,
+            maxZoom: 4,
+            tileSize: 256);
+
+        Assert.AreEqual(0, belowMinTiles.Count);
+        Assert.AreEqual(0, aboveMaxTiles.Count);
+    }
+
+    [TestMethod]
+    public void GetVisibleTiles_ClampsToConfiguredZoomRangeWhenLimitDisabled()
+    {
+        var service = new PreviewTileService(new RecordingTileImageRenderer());
+        var belowMinResolution = WebMercatorWorldWidth / (256 * Math.Pow(2.0, 1));
+        var aboveMaxResolution = WebMercatorWorldWidth / (256 * Math.Pow(2.0, 5));
+
+        var belowMinTiles = service.GetVisibleTiles(
+            new PreviewTileViewport(0, 0, 256, 256, belowMinResolution),
+            minZoom: 2,
+            maxZoom: 4,
+            tileSize: 256,
+            limitToZoomRange: false);
+        var aboveMaxTiles = service.GetVisibleTiles(
+            new PreviewTileViewport(0, 0, 256, 256, aboveMaxResolution),
+            minZoom: 2,
+            maxZoom: 4,
+            tileSize: 256,
+            limitToZoomRange: false);
+
+        Assert.IsTrue(belowMinTiles.Count > 0);
+        Assert.IsTrue(aboveMaxTiles.Count > 0);
+        Assert.IsTrue(belowMinTiles.All(tile => tile.Z == 2));
+        Assert.IsTrue(aboveMaxTiles.All(tile => tile.Z == 4));
+    }
+
+    [TestMethod]
+    public void GetVisibleTiles_ReturnsNoTilesForInvalidZoomRange()
+    {
+        var service = new PreviewTileService(new RecordingTileImageRenderer());
+        var resolution = WebMercatorWorldWidth / (256 * Math.Pow(2.0, 3));
+        var viewport = new PreviewTileViewport(0, 0, 256, 256, resolution);
+
+        var tiles = service.GetVisibleTiles(viewport, minZoom: 4, maxZoom: 2, tileSize: 256);
+
+        Assert.AreEqual(0, tiles.Count);
+    }
+
+    [TestMethod]
     public void CreateWorkItem_UsesCurrentSourceAndPreviewOptionsWithoutOutputDirectory()
     {
         using var temp = new TempFolder();

@@ -124,6 +124,7 @@ public sealed class ImagePaneConfig
 public sealed class PreviewConfig
 {
     public double Opacity { get; set; } = 0.65;
+    public bool LimitTilesToZoomLevel { get; set; } = true;
 }
 
 public sealed class ControlPointConfig
