@@ -85,6 +85,13 @@
             </Style.Triggers>
         </Style>
 
+        <Style x:Key="RenderSplitButton" TargetType="Button" BasedOn="{StaticResource RenderButton}">
+            <Setter Property="Width" Value="30" />
+            <Setter Property="MinWidth" Value="30" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="-1,0,0,0" />
+        </Style>
+
         <Style x:Key="PreviewToggleButton" TargetType="ToggleButton">
             <Setter Property="Background" Value="#303640" />
             <Setter Property="Foreground" Value="{StaticResource TextStrong}" />
@@ -450,6 +457,7 @@
             <Setter Property="BorderBrush" Value="#343B45" />
             <Setter Property="BorderThickness" Value="0,0,0,1" />
             <EventSetter Event="PreviewMouseRightButtonDown" Handler="ControlPointRow_PreviewMouseRightButtonDown" />
+            <EventSetter Event="MouseDoubleClick" Handler="ControlPointRow_MouseDoubleClick" />
             <Style.Triggers>
                 <Trigger Property="IsSelected" Value="True">
                     <Setter Property="Background" Value="#234A43" />
@@ -566,7 +574,7 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" IsEnabled="{Binding IsNotRendering}">
                     <TextBlock Text="QTiles" Foreground="{StaticResource TextStrong}" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,18,0" />
                     <Grid Margin="3,0">
                         <Grid.ColumnDefinitions>
@@ -761,6 +769,7 @@
                         <TextBlock Text="Project" Foreground="{StaticResource TextStrong}" FontSize="18" FontWeight="SemiBold" />
                         <TextBlock Text="YAML settings shared by CLI and editor" Style="{StaticResource PaneCaption}" Margin="0,2,0,12" />
 
+                        <StackPanel IsEnabled="{Binding IsNotRendering}">
                         <TextBlock Text="Name" Style="{StaticResource FieldLabel}" />
                         <TextBox Text="{Binding ProjectName, UpdateSourceTrigger=PropertyChanged}" />
 
@@ -927,6 +936,7 @@
                                   SelectedItem="{Binding Format}"
                                   Background="#15191F"
                                   Foreground="{StaticResource TextStrong}" />
+                        </StackPanel>
 
                         <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,18,0,0" Padding="12">
                             <StackPanel>
@@ -972,7 +982,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,12,0,0" Padding="12">
+                        <Border Background="#171A1F" BorderBrush="#38404B" BorderThickness="1" Margin="0,12,0,0" Padding="12" IsEnabled="{Binding IsNotRendering}">
                             <StackPanel>
                                 <TextBlock Text="Preview" Foreground="{StaticResource TextStrong}" FontWeight="SemiBold" />
                                 <WrapPanel Margin="0,12,0,0">
@@ -1005,6 +1015,7 @@
                                     <Button Grid.Column="1"
                                             Style="{StaticResource FieldIconButton}"
                                             Click="RenderOptionsButton_Click"
+                                            IsEnabled="{Binding IsNotRendering}"
                                             ToolTip="Render options"
                                             Margin="0">
                                         <TextBlock Text="&#xE713;"
@@ -1016,29 +1027,55 @@
                                 <TextBlock Text="{Binding RenderSummaryText}" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0" />
                                 <ProgressBar Value="{Binding RenderPercent}" Minimum="0" Maximum="100" Height="8" Margin="0,12,0,0" Foreground="{StaticResource Accent}" />
                                 <WrapPanel Margin="0,12,0,0">
-                                    <Button Command="{Binding RenderCommand}"
-                                            Style="{StaticResource RenderButton}"
-                                            IsEnabled="{Binding CanRender}"
-                                            Visibility="{Binding IsNotRendering, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                            MinWidth="78"
-                                            Margin="0,0,6,6">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE768;" Style="{StaticResource ButtonIcon}" />
-                                            <TextBlock Text="Render" />
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Command="{Binding CancelRenderCommand}"
-                                            Visibility="{Binding IsRendering, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                            ToolTip="Stops the active render job"
-                                            MinWidth="78"
-                                            Margin="0,0,6,6"
-                                            Background="#3A2830"
-                                            BorderBrush="#70424D">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE711;" Style="{StaticResource ButtonIcon}" />
-                                            <TextBlock Text="Cancel" />
-                                        </StackPanel>
-                                    </Button>
+                                    <Grid Margin="0,0,6,6">
+                                        <Grid x:Name="RenderButtonGroup">
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsRendering}" Value="True">
+                                                            <Setter Property="Visibility" Value="Hidden" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button Command="{Binding RenderCommand}"
+                                                    Style="{StaticResource RenderButton}"
+                                                    IsEnabled="{Binding CanRender}"
+                                                    MinWidth="78"
+                                                    Margin="0">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE768;" Style="{StaticResource ButtonIcon}" />
+                                                    <TextBlock Text="Render" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Grid.Column="1"
+                                                    Style="{StaticResource RenderSplitButton}"
+                                                    IsEnabled="{Binding CanRender}"
+                                                    Click="RenderDropDownButton_Click"
+                                                    ToolTip="More render actions">
+                                                <TextBlock Text="&#xE70D;"
+                                                           FontFamily="Segoe MDL2 Assets"
+                                                           FontSize="11" />
+                                            </Button>
+                                        </Grid>
+                                        <Button Command="{Binding CancelRenderCommand}"
+                                                Visibility="{Binding IsRendering, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                ToolTip="Stops the active render job"
+                                                HorizontalAlignment="Left"
+                                                Width="{Binding ActualWidth, ElementName=RenderButtonGroup}"
+                                                Margin="0"
+                                                Background="#3A2830"
+                                                BorderBrush="#70424D">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE711;" Style="{StaticResource ButtonIcon}" />
+                                                <TextBlock Text="Cancel" />
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
                                     <Button Command="{Binding OpenOutputCommand}"
                                             MinWidth="78"
                                             Margin="0,0,0,6">
@@ -1090,8 +1127,10 @@
                         </Grid>
                     </Border>
                     <DataGrid Grid.Row="1"
+                              x:Name="ControlPointsGrid"
                               ItemsSource="{Binding ControlPoints}"
                               SelectedItem="{Binding SelectedPoint}"
+                              IsEnabled="{Binding IsNotRendering}"
                               AutoGenerateColumns="False"
                               CanUserAddRows="False"
                               HeadersVisibility="Column"

@@ -200,9 +200,12 @@ public static class RenderCommand
         ApplyOverrides(project, reader);
         var summary = await new TileRenderer().RenderAsync(project, new Progress<TileRenderProgress>(p =>
         {
-            if (reader.Has("verbose"))
+            if (reader.Has("verbose") && p.CurrentPath is not null)
             {
-                Console.WriteLine($"{p.Percent:0.0}% {p.CurrentPath}");
+                var images = p.CurrentImages is { Count: > 0 }
+                    ? $" [{string.Join(", ", p.CurrentImages)}]"
+                    : string.Empty;
+                Console.WriteLine($"{p.Percent:0.0}% {p.CurrentPath}{images}");
             }
         }), cancellationToken);
 
@@ -224,7 +227,7 @@ public static class RenderCommand
         if (reader.Get("out") is { } output)
         {
             project.Output.Directory = output;
-            project.Output.TileJsonPath = Path.Combine(output, "tilejson.json");
+            project.Output.TileJsonPath = "";
         }
 
         if (int.TryParse(reader.Get("min-zoom"), out var minZoom))
@@ -257,9 +260,9 @@ public static class TileJsonCommand
         var project = await new QTilesYamlSerializer().ReadAsync(path, cancellationToken);
         var plan = new ProjectRenderPlanner().CreatePlan(project);
         var summary = new RenderSummary(0, 0, plan.ZoomRange.MinZoom, plan.ZoomRange.MaxZoom, plan.Bounds, TimeSpan.Zero);
-        var tileJsonPath = ProjectPaths.Resolve(project, project.Output.TileJsonPath);
+        var tileJsonPath = TileJsonWriter.ResolvePath(project);
         await TileJsonWriter.WriteAsync(project, plan, summary, tileJsonPath, cancellationToken);
-        Console.WriteLine(project.Output.TileJsonPath);
+        Console.WriteLine(tileJsonPath);
         return 0;
     }
 }

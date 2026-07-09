@@ -81,6 +81,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         ValidateCommand = new RelayCommand(Validate);
         SolveCommand = new RelayCommand(Solve);
         RenderCommand = new AsyncCommand(RenderAsync);
+        WriteTileJsonCommand = new AsyncCommand(WriteTileJsonOnlyAsync);
         cancelRenderCommand = new RelayCommand(CancelRender, () => IsRendering);
         CancelRenderCommand = cancelRenderCommand;
         OpenOutputCommand = new RelayCommand(OpenOutputFolder);
@@ -172,6 +173,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public ICommand ValidateCommand { get; }
     public ICommand SolveCommand { get; }
     public ICommand RenderCommand { get; }
+    public ICommand WriteTileJsonCommand { get; }
     public ICommand CancelRenderCommand { get; }
     public ICommand OpenOutputCommand { get; }
     public ICommand AddPointCommand { get; }
@@ -406,6 +408,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             }
 
             project.Output.Directory = value;
+            // TileJSON follows the output directory unless a project pins an explicit path.
+            project.Output.TileJsonPath = string.Empty;
             MarkDirty();
             OnPropertyChanged();
         }
@@ -568,6 +572,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         project.Render.Background,
         project.Render.SkipEmptyTiles,
         project.Render.Overwrite,
+        project.Render.ClearOutputDirectory,
         project.Output.TileJson);
 
     public void ApplyRenderOptions(RenderOptionsSnapshot options)
@@ -619,6 +624,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             changed = true;
         }
 
+        if (project.Render.ClearOutputDirectory != options.ClearOutputDirectory)
+        {
+            project.Render.ClearOutputDirectory = options.ClearOutputDirectory;
+            changed = true;
+        }
+
         if (project.Output.TileJson != options.WriteTileJson)
         {
             project.Output.TileJson = options.WriteTileJson;
@@ -643,7 +654,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public void HandleImagePaneClick(double imageX, double imageY, double? lon = null, double? lat = null)
     {
-        if (EditorMode == "Delete point")
+        if (IsRendering || EditorMode == "Delete point")
         {
             return;
         }
@@ -687,7 +698,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public void HandleWorldPaneClick(double lon, double lat, double? imageX = null, double? imageY = null)
     {
-        if (EditorMode == "Delete point")
+        if (IsRendering || EditorMode == "Delete point")
         {
             return;
         }
@@ -747,6 +758,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public void DeletePoint(ControlPointViewModel point)
     {
+        if (IsRendering)
+        {
+            return;
+        }
+
         ControlPoints.Remove(point);
         if (SelectedPoint == point)
         {
@@ -813,6 +829,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         await SaveProjectAsync();
     }
+
+    public Task<bool> SaveProjectForCloseAsync() => SaveProjectAsync();
 
     private async Task<bool> SaveProjectAsync()
     {
@@ -1075,7 +1093,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         var progress = new Progress<TileRenderProgress>(p =>
         {
             RenderPercent = p.Percent;
-            Status = $"Rendering zoom {p.Zoom}: {p.CompletedTiles}/{p.TotalTiles}";
+            var tileNumber = Math.Min(p.CompletedTiles + 1, p.TotalTiles);
+            Status = $"Rendering zoom {p.Zoom}: tile {tileNumber}/{p.TotalTiles}";
+            RenderSummaryText = p.TotalImages > 0
+                ? $"Rendering image {p.CurrentImage}/{p.TotalImages}"
+                : "Rendering...";
         });
         try
         {
@@ -1094,6 +1116,31 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             IsRendering = false;
             renderCancellation.Dispose();
             renderCancellation = null;
+        }
+    }
+
+    private async Task WriteTileJsonOnlyAsync()
+    {
+        if (IsRendering)
+        {
+            return;
+        }
+
+        SyncToProject();
+        NormalizeOutputPathsForCurrentRoot();
+        EnsureProjectBaseDirectory();
+        Status = "Writing TileJSON...";
+        try
+        {
+            var path = await new RenderJobService().WriteTileJsonAsync(project);
+            AddRecentOutputDirectory(ResolveOutputDirectory());
+            RenderSummaryText = "TileJSON written";
+            Status = $"TileJSON written: {path}";
+        }
+        catch (Exception ex)
+        {
+            Status = $"TileJSON failed: {ex.Message}";
+            ShowError("TileJSON failed", ex.Message);
         }
     }
 
@@ -1120,6 +1167,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void AddPoint()
     {
+        if (IsRendering)
+        {
+            return;
+        }
+
         var nextId = ControlPoints.Select(p => int.TryParse(p.Id, out var id) ? id : 0).DefaultIfEmpty().Max() + 1;
         ControlPoints.Add(new ControlPointViewModel
         {
@@ -1132,6 +1184,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void DeleteSelectedPoint()
     {
+        if (IsRendering)
+        {
+            return;
+        }
+
         if (SelectedPoint is not null)
         {
             ControlPoints.Remove(SelectedPoint);
@@ -1143,6 +1200,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void RefreshFromProject()
     {
+        // tilejson.json always follows the output directory now; drop any legacy stored path.
+        project.Output.TileJsonPath = string.Empty;
         useAutoZoomRange = ZoomRangeCalculator.UsesAutoZoom(project.Render);
         usesExplicitSources = ProjectSources.HasExplicitSources(project);
         Sources.Clear();
@@ -1806,6 +1865,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(OutputDirectory));
         }
 
+        if (string.IsNullOrWhiteSpace(project.Output.TileJsonPath))
+        {
+            return;
+        }
+
         var tileJsonPath = ProjectPathFormatter.FormatForProject(root, ResolveProjectPath(project.Output.TileJsonPath));
         if (!string.Equals(project.Output.TileJsonPath, tileJsonPath, StringComparison.Ordinal))
         {
@@ -2121,4 +2185,5 @@ public sealed record RenderOptionsSnapshot(
     string Background,
     bool SkipEmptyTiles,
     bool Overwrite,
+    bool ClearOutputDirectory,
     bool WriteTileJson);

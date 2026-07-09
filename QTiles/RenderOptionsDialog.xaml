@@ -300,10 +300,13 @@
                               SelectedItem="{Binding Background, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                 </StackPanel>
 
-                <UniformGrid Columns="3" Margin="0,14,0,0">
+                <UniformGrid Columns="2" Margin="0,14,0,0">
                     <CheckBox Content="Skip empty tiles" IsChecked="{Binding SkipEmptyTiles}" />
                     <CheckBox Content="Overwrite tiles" IsChecked="{Binding Overwrite}" />
                     <CheckBox Content="Write TileJSON" IsChecked="{Binding WriteTileJson}" />
+                    <CheckBox Content="Clear output folder first"
+                              IsChecked="{Binding ClearOutputDirectory}"
+                              ToolTip="Deletes everything inside the output directory before rendering." />
                 </UniformGrid>
             </StackPanel>
         </Border>

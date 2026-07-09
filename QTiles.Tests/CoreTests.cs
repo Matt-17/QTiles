@@ -491,6 +491,43 @@ public sealed class RendererTests
     }
 
     [TestMethod]
+    public async Task Renderer_DefaultTileJsonPath_WritesIntoOutputDirectory()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        WriteRgbSource(source, 4, 4);
+        var output = Path.Combine(temp.Path, "out");
+        var project = FullWorldProject(source, output, tileSize: 2);
+        project.Output.TileJsonPath = "";
+
+        await new TileRenderer().RenderAsync(project, null, CancellationToken.None);
+
+        Assert.IsTrue(File.Exists(Path.Combine(output, "tilejson.json")));
+    }
+
+    [TestMethod]
+    public async Task Renderer_ClearOutputDirectory_RemovesStaleOutputBeforeRender()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        WriteRgbSource(source, 4, 4);
+        var output = Path.Combine(temp.Path, "tiles");
+        var project = FullWorldProject(source, output, tileSize: 2);
+        project.Render.ClearOutputDirectory = true;
+        Directory.CreateDirectory(Path.Combine(output, "9", "0"));
+        var staleTile = Path.Combine(output, "9", "0", "0.png");
+        await File.WriteAllTextAsync(staleTile, "stale");
+        var staleFile = Path.Combine(output, "stale.txt");
+        await File.WriteAllTextAsync(staleFile, "stale");
+
+        await new TileRenderer().RenderAsync(project, null, CancellationToken.None);
+
+        Assert.IsFalse(Directory.Exists(Path.Combine(output, "9")));
+        Assert.IsFalse(File.Exists(staleFile));
+        Assert.IsTrue(File.Exists(Path.Combine(output, "1", "1", "0.png")));
+    }
+
+    [TestMethod]
     public async Task Renderer_PngPreservesTransparency()
     {
         using var temp = new TempFolder();

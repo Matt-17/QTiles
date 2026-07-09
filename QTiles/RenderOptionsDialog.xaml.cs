@@ -38,6 +38,7 @@ public sealed class RenderOptionsDialogModel : INotifyPropertyChanged
     private string background = "white";
     private bool skipEmptyTiles = true;
     private bool overwrite = true;
+    private bool clearOutputDirectory;
     private bool writeTileJson = true;
 
     public RenderOptionsDialogModel(RenderOptionsSnapshot snapshot)
@@ -49,6 +50,7 @@ public sealed class RenderOptionsDialogModel : INotifyPropertyChanged
         background = NormalizeJpegMatte(snapshot.Background);
         skipEmptyTiles = snapshot.SkipEmptyTiles;
         overwrite = snapshot.Overwrite;
+        clearOutputDirectory = snapshot.ClearOutputDirectory;
         writeTileJson = snapshot.WriteTileJson;
     }
 
@@ -124,6 +126,12 @@ public sealed class RenderOptionsDialogModel : INotifyPropertyChanged
         set => SetField(ref overwrite, value);
     }
 
+    public bool ClearOutputDirectory
+    {
+        get => clearOutputDirectory;
+        set => SetField(ref clearOutputDirectory, value);
+    }
+
     public bool WriteTileJson
     {
         get => writeTileJson;
@@ -138,6 +146,7 @@ public sealed class RenderOptionsDialogModel : INotifyPropertyChanged
         Background,
         SkipEmptyTiles,
         Overwrite,
+        ClearOutputDirectory,
         WriteTileJson);
 
     public bool TryValidate(out string message)

@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Shell;
 using BruTile.Predefined;
 using Mapsui;
 using Mapsui.Extensions;
@@ -58,6 +59,7 @@ public partial class MainWindow : Window
     private long previewStateVersion;
     private bool startupProjectLoaded;
     private bool initialWorldViewApplied;
+    private bool forceClose;
     private bool isSyncingImageToWorld;
     private bool isSyncingWorldToImage;
     private const double WebMercatorHalfWorld = 20037508.342789244;
@@ -117,6 +119,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        TaskbarItemInfo = new TaskbarItemInfo();
         editorSettings = settingsService.Load();
         viewModel.UseEditorSettings(editorSettings, () => settingsService.Save(editorSettings));
         ApplyWindowSettings(editorSettings.Window);
@@ -171,25 +174,41 @@ public partial class MainWindow : Window
 
     private void OnClosing(object? sender, CancelEventArgs e)
     {
-        if (viewModel.HasUnsavedChanges)
+        if (!forceClose && viewModel.HasUnsavedChanges)
         {
             var result = MessageBox.Show(
                 this,
-                "There are unsaved project changes. Close without saving?",
+                "Save changes to the project before closing?",
                 "Unsaved changes",
-                MessageBoxButton.YesNo,
+                MessageBoxButton.YesNoCancel,
                 MessageBoxImage.Warning,
-                MessageBoxResult.No);
-            if (result != MessageBoxResult.Yes)
+                MessageBoxResult.Cancel);
+            switch (result)
             {
-                e.Cancel = true;
-                return;
+                case MessageBoxResult.Yes:
+                    e.Cancel = true;
+                    _ = SaveAndCloseAsync();
+                    return;
+                case MessageBoxResult.No:
+                    break;
+                default:
+                    e.Cancel = true;
+                    return;
             }
         }
 
         CancelPreviewTiles();
         CaptureEditorSettings();
         settingsService.Save(editorSettings);
+    }
+
+    private async Task SaveAndCloseAsync()
+    {
+        if (await viewModel.SaveProjectForCloseAsync())
+        {
+            forceClose = true;
+            Close();
+        }
     }
 
     private void RecentDropDownButton_Click(object sender, RoutedEventArgs e)
@@ -213,6 +232,25 @@ public partial class MainWindow : Window
         {
             return;
         }
+
+        e.Handled = true;
+        menu.PlacementTarget = button;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private void RenderDropDownButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button)
+        {
+            return;
+        }
+
+        var menu = CreateStyledContextMenu();
+        var tileJsonItem = CreateStyledMenuItem("TileJSON only", "");
+        tileJsonItem.ToolTip = "Writes tilejson.json into the output directory without rendering tiles";
+        tileJsonItem.Command = viewModel.WriteTileJsonCommand;
+        menu.Items.Add(tileJsonItem);
 
         e.Handled = true;
         menu.PlacementTarget = button;
@@ -362,6 +400,25 @@ public partial class MainWindow : Window
 
     private void ViewModelOnPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName is nameof(MainWindowViewModel.IsRendering) or nameof(MainWindowViewModel.RenderPercent))
+        {
+            UpdateTaskbarProgress();
+        }
+
+        if (e.PropertyName is nameof(MainWindowViewModel.IsRendering))
+        {
+            // The live map preview pauses during a render job so preview tiles do not
+            // compete with it for image decoding and CPU.
+            if (viewModel.IsRendering)
+            {
+                ClearPreviewOverlay();
+            }
+            else
+            {
+                RedrawPreviewOverlay();
+            }
+        }
+
         if (e.PropertyName is nameof(MainWindowViewModel.SourceImage))
         {
             RefreshSourceImage();
@@ -408,6 +465,13 @@ public partial class MainWindow : Window
             RedrawPreviewOverlay();
         }
 
+        if (e.PropertyName is nameof(MainWindowViewModel.SelectedPoint)
+            && viewModel.SelectedPoint is { } selectedPoint
+            && ControlPointsGrid.Items.Contains(selectedPoint))
+        {
+            ControlPointsGrid.ScrollIntoView(selectedPoint);
+        }
+
         if (e.PropertyName is nameof(MainWindowViewModel.SelectedPoint) or nameof(MainWindowViewModel.CurrentSolveResult))
         {
             if (e.PropertyName is nameof(MainWindowViewModel.CurrentSolveResult))
@@ -422,6 +486,25 @@ public partial class MainWindow : Window
             }
 
             RedrawMarkers();
+        }
+    }
+
+    private void UpdateTaskbarProgress()
+    {
+        if (TaskbarItemInfo is not { } taskbar)
+        {
+            return;
+        }
+
+        if (viewModel.IsRendering)
+        {
+            taskbar.ProgressState = TaskbarItemProgressState.Normal;
+            taskbar.ProgressValue = Math.Clamp(viewModel.RenderPercent / 100.0, 0.0, 1.0);
+        }
+        else
+        {
+            taskbar.ProgressState = TaskbarItemProgressState.None;
+            taskbar.ProgressValue = 0;
         }
     }
 
@@ -536,7 +619,12 @@ public partial class MainWindow : Window
         var geo = ScreenToWorld(position);
         double? imageX = null;
         double? imageY = null;
-        if (TryGetCurrentImageViewCenter(out var imageCenter))
+        if (TryPredictImageFromWorld(geo, out var predictedImage))
+        {
+            imageX = predictedImage.X;
+            imageY = predictedImage.Y;
+        }
+        else if (TryGetCurrentImageViewCenter(out var imageCenter))
         {
             imageX = imageCenter.X;
             imageY = imageCenter.Y;
@@ -567,7 +655,12 @@ public partial class MainWindow : Window
 
         double? lon = null;
         double? lat = null;
-        if (TryGetCurrentWorldViewCenter(out var worldCenter))
+        if (TryPredictWorldFromImage(image, out var predictedGeo))
+        {
+            lon = predictedGeo.Lon;
+            lat = predictedGeo.Lat;
+        }
+        else if (TryGetCurrentWorldViewCenter(out var worldCenter))
         {
             lon = worldCenter.Lon;
             lat = worldCenter.Lat;
@@ -727,7 +820,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!viewModel.IsPreviewEnabled)
+        if (!viewModel.IsPreviewEnabled || viewModel.IsRendering)
         {
             ClearPreviewOverlay();
             return;
@@ -1114,6 +1207,11 @@ public partial class MainWindow : Window
         {
             e.Handled = true;
             viewModel.SelectedPoint = point;
+            if (viewModel.IsRendering)
+            {
+                return;
+            }
+
             if (viewModel.EditorMode == "Delete point")
             {
                 viewModel.DeletePoint(point);
@@ -1138,6 +1236,11 @@ public partial class MainWindow : Window
         {
             e.Handled = true;
             viewModel.SelectedPoint = point;
+            if (viewModel.IsRendering)
+            {
+                return;
+            }
+
             if (marker.ContextMenu is { } menu)
             {
                 menu.PlacementTarget = marker;
@@ -1145,6 +1248,18 @@ public partial class MainWindow : Window
             }
         };
         return marker;
+    }
+
+    private void ControlPointRow_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not DataGridRow { DataContext: ControlPointViewModel point })
+        {
+            return;
+        }
+
+        viewModel.SelectedPoint = point;
+        CenterWorldOnPoint(point);
+        RedrawMarkers();
     }
 
     private void ControlPointRow_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -1375,6 +1490,125 @@ public partial class MainWindow : Window
         geo = new GeoPoint(
             Math.Clamp(lon, -180.0, 180.0),
             Math.Clamp(lat, -WebMercator.MaxLatitude, WebMercator.MaxLatitude));
+        return true;
+    }
+
+    private bool TryPredictWorldFromImage(Point image, out GeoPoint geo)
+    {
+        geo = new GeoPoint(0, 0);
+        if (!TryCreatePredictionTransform(out var transform))
+        {
+            return false;
+        }
+
+        try
+        {
+            var normalized = transform.ImageToWorld(ToImagePoint(image));
+            if (!IsFinitePoint(normalized.X, normalized.Y))
+            {
+                return false;
+            }
+
+            var predicted = WebMercator.NormalizedToLonLat(normalized.X, normalized.Y);
+            if (!IsFinitePoint(predicted.Lon, predicted.Lat))
+            {
+                return false;
+            }
+
+            geo = new GeoPoint(
+                Math.Clamp(predicted.Lon, -180.0, 180.0),
+                Math.Clamp(predicted.Lat, -WebMercator.MaxLatitude, WebMercator.MaxLatitude));
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private bool TryPredictImageFromWorld(GeoPoint geo, out Point image)
+    {
+        image = default;
+        if (imagePixelWidth <= 0 || imagePixelHeight <= 0 || !TryCreatePredictionTransform(out var transform))
+        {
+            return false;
+        }
+
+        try
+        {
+            var normalized = WebMercator.LonLatToNormalized(geo.Lon, geo.Lat);
+            var predicted = transform.WorldToImage(normalized);
+            if (!IsFinitePoint(predicted.X, predicted.Y))
+            {
+                return false;
+            }
+
+            image = new Point(
+                Math.Clamp(predicted.X, 0, imagePixelWidth),
+                Math.Clamp(predicted.Y, 0, imagePixelHeight));
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private bool TryCreatePredictionTransform(out IGeoTransform transform)
+    {
+        transform = null!;
+        if (viewModel.CurrentSolveResult is { } solved)
+        {
+            transform = solved.Transform;
+            return true;
+        }
+
+        var anchors = viewModel.ControlPoints.Where(p => p.Enabled).ToList();
+        if (anchors.Count >= 2)
+        {
+            try
+            {
+                transform = new TransformSolver().SolveSimilarity([anchors[0].ToConfig(), anchors[1].ToConfig()]);
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                // Coincident points; fall back to the single-anchor estimate below.
+            }
+        }
+
+        return anchors.Count >= 1 && TryCreateSingleAnchorTransform(anchors[0], out transform);
+    }
+
+    private bool TryCreateSingleAnchorTransform(ControlPointViewModel anchor, out IGeoTransform transform)
+    {
+        transform = null!;
+        var viewport = WorldMapControl.Map?.Navigator.Viewport;
+        var rect = GetImageDisplayRect();
+        if (viewport is not { } activeViewport
+            || !IsFinitePositive(activeViewport.Resolution)
+            || rect.IsEmpty
+            || imagePixelWidth <= 0)
+        {
+            return false;
+        }
+
+        // Assume both panes currently show the same area: an offset in image pixels maps to the
+        // same on-screen offset in the world pane, i.e. same direction and distance at current zoom.
+        var dipPerImagePixel = rect.Width / imagePixelWidth * imageZoom;
+        var normalizedPerImagePixel = dipPerImagePixel * activeViewport.Resolution / WebMercatorWorldWidth;
+        if (!IsFinitePositive(normalizedPerImagePixel))
+        {
+            return false;
+        }
+
+        var world = WebMercator.LonLatToNormalized(anchor.Longitude, anchor.Latitude);
+        transform = new SimilarityTransform(
+            normalizedPerImagePixel,
+            1.0,
+            0.0,
+            world.X - normalizedPerImagePixel * anchor.ImageX,
+            world.Y - normalizedPerImagePixel * anchor.ImageY);
         return true;
     }
 

@@ -10,7 +10,15 @@ namespace QTiles.Core.Rendering;
 
 public sealed record TileRenderJob(QTilesProject Project, string ProjectPath);
 
-public sealed record TileRenderProgress(int Zoom, int CompletedTiles, int TotalTiles, string? CurrentPath, double Percent);
+public sealed record TileRenderProgress(
+    int Zoom,
+    int CompletedTiles,
+    int TotalTiles,
+    string? CurrentPath,
+    double Percent,
+    IReadOnlyList<string>? CurrentImages = null,
+    int CurrentImage = 0,
+    int TotalImages = 0);
 
 public sealed record RenderSummary(int TilesWritten, int TilesSkipped, int MinZoom, int MaxZoom, GeoBounds Bounds, TimeSpan Duration);
 
@@ -61,6 +69,11 @@ public sealed class TileRenderer : ITileRenderer
 
         var stopwatch = Stopwatch.StartNew();
         var outputDirectory = ProjectPaths.Resolve(project, project.Output.Directory);
+        if (project.Render.ClearOutputDirectory)
+        {
+            ClearOutputDirectoryContents(outputDirectory);
+        }
+
         var plan = planner.CreatePlan(project);
         var tiles = ResolveTiles(plan).ToList();
         var total = tiles.Count;
@@ -75,11 +88,22 @@ public sealed class TileRenderer : ITileRenderer
             project.Render.Resampling,
             project.Render.Background);
 
+        var totalImages = plan.Sources.Count;
         foreach (var tile in tiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var path = Path.Combine(outputDirectory, tile.Z.ToString(), tile.X.ToString(), $"{tile.Y}.{NormalizeExtension(project.Render.Format)}");
-            var request = new RenderedTileRequest(GetTileSources(plan.Sources, tile), tile, project.Render.TileSize, options);
+            var (tileSources, currentImage) = GetTileSources(plan.Sources, tile);
+            progress?.Report(new TileRenderProgress(
+                tile.Z,
+                completed,
+                total,
+                path,
+                total == 0 ? 100 : completed * 100.0 / total,
+                GetTileImageNames(tileSources),
+                currentImage,
+                totalImages));
+            var request = new RenderedTileRequest(tileSources, tile, project.Render.TileSize, options);
             if (await tileWriter.WriteAsync(path, request, cancellationToken))
             {
                 written++;
@@ -90,14 +114,15 @@ public sealed class TileRenderer : ITileRenderer
             }
 
             completed++;
-            progress?.Report(new TileRenderProgress(tile.Z, completed, total, path, total == 0 ? 100 : completed * 100.0 / total));
         }
+
+        progress?.Report(new TileRenderProgress(plan.ZoomRange.MaxZoom, completed, total, null, 100, [], totalImages, totalImages));
 
         stopwatch.Stop();
         var summary = new RenderSummary(written, skipped, plan.ZoomRange.MinZoom, plan.ZoomRange.MaxZoom, plan.Bounds, stopwatch.Elapsed);
         if (project.Output.TileJson)
         {
-            await TileJsonWriter.WriteAsync(project, plan, summary, ProjectPaths.Resolve(project, project.Output.TileJsonPath), cancellationToken);
+            await TileJsonWriter.WriteAsync(project, plan, summary, TileJsonWriter.ResolvePath(project), cancellationToken);
         }
 
         return summary;
@@ -123,13 +148,15 @@ public sealed class TileRenderer : ITileRenderer
             .ThenBy(tile => tile.Y);
     }
 
-    private static IReadOnlyList<RenderedTileSource> GetTileSources(
+    private static (IReadOnlyList<RenderedTileSource> Layers, int CurrentImage) GetTileSources(
         IReadOnlyList<RenderSourceContext> sources,
         TileCoord tile)
     {
         var layers = new List<RenderedTileSource>();
-        foreach (var source in sources)
+        var currentImage = 0;
+        for (var i = 0; i < sources.Count; i++)
         {
+            var source = sources[i];
             var range = TileMath.BoundsToTileRange(source.SolveResult.Bounds, tile.Z);
             if (tile.X >= range.MinX
                 && tile.X <= range.MaxX
@@ -137,10 +164,46 @@ public sealed class TileRenderer : ITileRenderer
                 && tile.Y <= range.MaxY)
             {
                 layers.Add(new RenderedTileSource(source.SourceImagePath, source.RenderTransform, source.Source.Opacity));
+                currentImage = i + 1;
             }
         }
 
-        return layers;
+        return (layers, currentImage);
+    }
+
+    private static IReadOnlyList<string> GetTileImageNames(IReadOnlyList<RenderedTileSource> tileSources) =>
+        tileSources
+            .Select(source => Path.GetFileName(source.SourceImagePath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static void ClearOutputDirectoryContents(string outputDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            return;
+        }
+
+        var directory = new DirectoryInfo(Path.GetFullPath(outputDirectory));
+        if (!directory.Exists)
+        {
+            return;
+        }
+
+        if (directory.Parent is null)
+        {
+            throw new InvalidOperationException($"Refusing to clear filesystem root as output directory: {directory.FullName}");
+        }
+
+        foreach (var child in directory.EnumerateDirectories())
+        {
+            child.Delete(recursive: true);
+        }
+
+        foreach (var file in directory.EnumerateFiles())
+        {
+            file.Delete();
+        }
     }
 
     private static string NormalizeExtension(string format) => format.Equals("jpeg", StringComparison.OrdinalIgnoreCase) ? "jpg" : format.ToLowerInvariant();
@@ -148,6 +211,12 @@ public sealed class TileRenderer : ITileRenderer
 
 public static class TileJsonWriter
 {
+    public static string ResolvePath(QTilesProject project) =>
+        // tilejson.json always lives inside the output directory. The legacy
+        // Output.TileJsonPath field is intentionally ignored so a stale stored path
+        // (e.g. an older "./tiles/tilejson.json") can never override a chosen output folder.
+        Path.Combine(ProjectPaths.Resolve(project, project.Output.Directory), "tilejson.json");
+
     public static async Task WriteAsync(
         QTilesProject project,
         TransformSolveResult solveResult,

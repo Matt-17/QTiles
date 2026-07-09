@@ -92,6 +92,7 @@ public sealed class RenderConfig
     public string Background { get; set; } = "white";
     public bool SkipEmptyTiles { get; set; } = true;
     public bool Overwrite { get; set; } = true;
+    public bool ClearOutputDirectory { get; set; }
     public string Bounds { get; set; } = "auto";
 }
 
@@ -99,7 +100,9 @@ public sealed class OutputConfig
 {
     public string Directory { get; set; } = "./tiles";
     public bool TileJson { get; set; } = true;
-    public string TileJsonPath { get; set; } = "./tiles/tilejson.json";
+
+    /// <summary>Empty means "tilejson.json inside the output directory".</summary>
+    public string TileJsonPath { get; set; } = "";
 }
 
 public sealed class EditorConfig

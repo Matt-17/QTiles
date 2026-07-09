@@ -25,6 +25,19 @@ public sealed class RenderJobService
             cancellationToken);
     }
 
+    public Task<string> WriteTileJsonAsync(QTilesProject project, CancellationToken cancellationToken = default)
+    {
+        var snapshot = Snapshot(project);
+        return Task.Run(async () =>
+        {
+            var plan = new ProjectRenderPlanner().CreatePlan(snapshot);
+            var summary = new RenderSummary(0, 0, plan.ZoomRange.MinZoom, plan.ZoomRange.MaxZoom, plan.Bounds, TimeSpan.Zero);
+            var path = TileJsonWriter.ResolvePath(snapshot);
+            await TileJsonWriter.WriteAsync(snapshot, plan, summary, path, cancellationToken);
+            return path;
+        }, cancellationToken);
+    }
+
     private static QTilesProject Snapshot(QTilesProject project)
     {
         var serializer = new QTilesYamlSerializer();
