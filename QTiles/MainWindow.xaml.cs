@@ -510,6 +510,21 @@ public partial class MainWindow : Window
 
     private void ControlPointsOnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            // Reset (e.g. Clear) carries no OldItems, so drop every tracked handler
+            // and resubscribe whatever is currently in the collection.
+            foreach (var (point, handler) in pointHandlers)
+            {
+                point.PropertyChanged -= handler;
+            }
+
+            pointHandlers.Clear();
+            SubscribePointHandlers();
+            RedrawMarkers();
+            return;
+        }
+
         if (e.OldItems is not null)
         {
             foreach (ControlPointViewModel point in e.OldItems)
@@ -705,6 +720,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            CompleteMarkerDrag();
+            return;
+        }
+
         if (draggedPane == "image" && sender == ImageOverlay && imagePixelWidth > 0 && imagePixelHeight > 0)
         {
             var image = ScreenToImage(e.GetPosition(ImageOverlay));
@@ -737,6 +758,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        CompleteMarkerDrag();
+    }
+
+    private void CompleteMarkerDrag()
+    {
+        if (draggedPoint is null || draggedPane is null)
+        {
+            return;
+        }
+
+        viewModel.EndPointDrag();
         if (draggedPane == "image")
         {
             viewModel.MoveImagePoint(draggedPoint, draggedPoint.ImageX, draggedPoint.ImageY);
@@ -865,7 +897,8 @@ public partial class MainWindow : Window
             viewModel.MinZoom,
             viewModel.MaxZoom,
             tileSize,
-            viewModel.LimitPreviewTilesToZoomLevel);
+            viewModel.LimitPreviewTilesToZoomLevel,
+            previewPlan.Bounds);
         foreach (var tile in tiles)
         {
             try
@@ -1228,6 +1261,7 @@ public partial class MainWindow : Window
 
             draggedPoint = point;
             draggedPane = pane;
+            viewModel.BeginPointDrag();
             HidePreviewDuringMarkerDrag();
             overlay.CaptureMouse();
         };
@@ -1414,7 +1448,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        var previousLayers = map.Layers.ToList();
         map.Layers.Clear();
+        foreach (var layer in previousLayers)
+        {
+            (layer as IDisposable)?.Dispose();
+        }
+
         AddBaseMapLayer(map);
         RedrawMarkers();
     }

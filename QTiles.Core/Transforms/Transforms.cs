@@ -98,14 +98,16 @@ public sealed class TransformSolver
         IGeoTransform transform = type switch
         {
             "similarity" => SolveSimilarity(enabled),
-            _ => SolveAffine(enabled)
+            "affine" => SolveAffine(enabled),
+            _ => throw new InvalidOperationException($"Unknown georeference transform type: {georeference.Transform.Type}. Supported types: affine, similarity.")
         };
 
         return CreateResult(
-            type == "similarity" ? "similarity" : "affine",
+            type,
             transform,
             enabled,
             errorMaxZoom ?? render.MaxZoom,
+            render.TileSize,
             imageWidth,
             imageHeight);
     }
@@ -183,10 +185,11 @@ public sealed class TransformSolver
         IGeoTransform transform,
         IReadOnlyList<ControlPointConfig> points,
         int maxZoom,
+        int tileSize,
         int imageWidth,
         int imageHeight)
     {
-        var pixelScale = 256.0 * Math.Pow(2.0, maxZoom);
+        var pixelScale = tileSize * Math.Pow(2.0, maxZoom);
         var errors = points.Select(point =>
         {
             var predicted = transform.ImageToWorld(point.Image);

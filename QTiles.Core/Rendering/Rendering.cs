@@ -206,7 +206,7 @@ public sealed class TileRenderer : ITileRenderer
         }
     }
 
-    private static string NormalizeExtension(string format) => format.Equals("jpeg", StringComparison.OrdinalIgnoreCase) ? "jpg" : format.ToLowerInvariant();
+    internal static string NormalizeExtension(string format) => format.Equals("jpeg", StringComparison.OrdinalIgnoreCase) ? "jpg" : format.ToLowerInvariant();
 }
 
 public static class TileJsonWriter
@@ -227,7 +227,7 @@ public static class TileJsonWriter
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var bounds = renderSummary.Bounds;
         var center = bounds.Center;
-        var tileTemplate = $"./{{z}}/{{x}}/{{y}}.{project.Render.Format.ToLowerInvariant()}";
+        var tileTemplate = $"./{{z}}/{{x}}/{{y}}.{TileRenderer.NormalizeExtension(project.Render.Format)}";
         var payload = new Dictionary<string, object?>
         {
             ["tilejson"] = "3.0.0",
@@ -256,7 +256,7 @@ public static class TileJsonWriter
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var bounds = renderSummary.Bounds;
         var center = bounds.Center;
-        var tileTemplate = $"./{{z}}/{{x}}/{{y}}.{project.Render.Format.ToLowerInvariant()}";
+        var tileTemplate = $"./{{z}}/{{x}}/{{y}}.{TileRenderer.NormalizeExtension(project.Render.Format)}";
         var payload = new Dictionary<string, object?>
         {
             ["tilejson"] = "3.0.0",

@@ -61,9 +61,17 @@ public sealed class ProjectValidator
             messages.Add(Error("tile-size", "render.tileSize must be positive."));
         }
 
-        if (!ZoomRangeCalculator.UsesAutoZoom(project.Render) && project.Render.MinZoom > project.Render.MaxZoom)
+        if (!ZoomRangeCalculator.UsesAutoZoom(project.Render))
         {
-            messages.Add(Error("zoom-range", "render.minZoom must be less than or equal to render.maxZoom."));
+            if (project.Render.MinZoom < 0 || project.Render.MinZoom > ZoomRangeCalculator.MaxSupportedZoom
+                || project.Render.MaxZoom < 0 || project.Render.MaxZoom > ZoomRangeCalculator.MaxSupportedZoom)
+            {
+                messages.Add(Error("zoom-bounds", $"render.minZoom and render.maxZoom must be between 0 and {ZoomRangeCalculator.MaxSupportedZoom}."));
+            }
+            else if (project.Render.MinZoom > project.Render.MaxZoom)
+            {
+                messages.Add(Error("zoom-range", "render.minZoom must be less than or equal to render.maxZoom."));
+            }
         }
 
         if (!new[] { "png", "jpg", "jpeg", "webp" }.Contains(project.Render.Format.Trim().ToLowerInvariant()))
@@ -106,6 +114,11 @@ public sealed class ProjectValidator
 
         var enabled = source.Georeference.ControlPoints.Where(p => p.Enabled).ToList();
         var transform = source.Georeference.Transform.Type.Trim().ToLowerInvariant();
+        if (transform is not ("affine" or "similarity"))
+        {
+            messages.Add(Error("transform-type", $"Source {sourceName} has unknown transform type '{source.Georeference.Transform.Type}'. Supported types: affine, similarity."));
+        }
+
         if (transform == "affine" && enabled.Count < 3)
         {
             messages.Add(Error("affine-points", $"Source {sourceName} affine transform requires at least 3 enabled control points."));

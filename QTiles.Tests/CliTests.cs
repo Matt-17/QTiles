@@ -99,6 +99,87 @@ public sealed class CliTests
         Assert.IsTrue(File.Exists(project.Output.TileJsonPath));
     }
 
+    [TestMethod]
+    public async Task Cli_Validate_BooleanFlagBeforePath_DoesNotSwallowPath()
+    {
+        using var temp = new TempFolder();
+        var image = Path.Combine(temp.Path, "sample.png");
+        await CreateImageAsync(image);
+        var yaml = Path.Combine(temp.Path, "qtiles.yaml");
+        await new QTilesYamlSerializer().WriteAsync(SolvableProject(image), yaml);
+
+        var exitCode = await CliApplication.RunAsync(["validate", "--json", yaml], CancellationToken.None);
+
+        Assert.AreEqual(0, exitCode);
+    }
+
+    [TestMethod]
+    public async Task Cli_Render_OverwriteFlagBeforePath_DoesNotSwallowPath()
+    {
+        using var temp = new TempFolder();
+        var image = Path.Combine(temp.Path, "sample.png");
+        WriteRgbSource(image);
+        var yaml = Path.Combine(temp.Path, "qtiles.yaml");
+        var project = SolvableProject(image);
+        project.Render.TileSize = 2;
+        project.Render.AutoZoom = false;
+        project.Render.MinZoom = 0;
+        project.Render.MaxZoom = 0;
+        project.Render.Resampling = "nearest";
+        project.Output.Directory = Path.Combine(temp.Path, "tiles");
+        project.Output.TileJsonPath = Path.Combine(temp.Path, "tiles", "tilejson.json");
+        await new QTilesYamlSerializer().WriteAsync(project, yaml);
+
+        var exitCode = await CliApplication.RunAsync(["render", "--overwrite", yaml], CancellationToken.None);
+
+        Assert.AreEqual(0, exitCode);
+        Assert.IsTrue(File.Exists(Path.Combine(project.Output.Directory, "0", "0", "0.png")));
+    }
+
+    [TestMethod]
+    public async Task Cli_Init_MinZoomWithoutMaxZoom_Fails()
+    {
+        using var temp = new TempFolder();
+        var image = Path.Combine(temp.Path, "sample.png");
+        await CreateImageAsync(image);
+        var yaml = Path.Combine(temp.Path, "qtiles.yaml");
+
+        var exitCode = await CliApplication.RunAsync(["init", "--image", image, "--out", yaml, "--min-zoom", "3"], CancellationToken.None);
+
+        Assert.AreEqual(3, exitCode);
+        Assert.IsFalse(File.Exists(yaml));
+    }
+
+    [TestMethod]
+    public async Task Cli_Init_BothZoomFlags_WritesFixedZoomRange()
+    {
+        using var temp = new TempFolder();
+        var image = Path.Combine(temp.Path, "sample.png");
+        await CreateImageAsync(image);
+        var yaml = Path.Combine(temp.Path, "qtiles.yaml");
+
+        var exitCode = await CliApplication.RunAsync(["init", "--image", image, "--out", yaml, "--min-zoom", "3", "--max-zoom", "5"], CancellationToken.None);
+
+        Assert.AreEqual(0, exitCode);
+        var content = await File.ReadAllTextAsync(yaml);
+        StringAssert.Contains(content, "minZoom: 3");
+        StringAssert.Contains(content, "maxZoom: 5");
+    }
+
+    [TestMethod]
+    public async Task Cli_Init_NonNumericZoom_Fails()
+    {
+        using var temp = new TempFolder();
+        var image = Path.Combine(temp.Path, "sample.png");
+        await CreateImageAsync(image);
+        var yaml = Path.Combine(temp.Path, "qtiles.yaml");
+
+        var exitCode = await CliApplication.RunAsync(["init", "--image", image, "--out", yaml, "--min-zoom", "abc", "--max-zoom", "5"], CancellationToken.None);
+
+        Assert.AreEqual(3, exitCode);
+        Assert.IsFalse(File.Exists(yaml));
+    }
+
     private static QTilesProject SolvableProject(string image) => new()
     {
         Source = new SourceConfig { Image = image },

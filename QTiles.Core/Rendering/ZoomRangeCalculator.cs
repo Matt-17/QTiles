@@ -7,7 +7,8 @@ public sealed record ZoomRangeRecommendation(int MinZoom, int MaxZoom);
 
 public static class ZoomRangeCalculator
 {
-    public const int MaxSupportedZoom = 24;
+    // Upper bound of the zoom levels common to Google Maps / Leaflet style web maps.
+    public const int MaxSupportedZoom = 22;
     private const int MaxRecommendedLevels = 7;
     private const int MinimumUsefulLongSidePixels = 64;
 

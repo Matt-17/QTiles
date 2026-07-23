@@ -1,10 +1,11 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
 
   <PropertyGroup>
+    <!-- ProductVersion default must be assigned before OutputName references it (MSBuild evaluates in document order). -->
+    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0</ProductVersion>
     <OutputName>QTiles-$(ProductVersion)-x64</OutputName>
     <OutputType>Package</OutputType>
     <Platform>x64</Platform>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0</ProductVersion>
     <PublishDir>$(MSBuildThisFileDirectory)..\artifacts\publish\QTiles\$(Configuration)\win-x64\</PublishDir>
     <ReleaseArtifactDir>$(MSBuildThisFileDirectory)..\artifact\release\</ReleaseArtifactDir>
     <OutputPath>$(ReleaseArtifactDir)</OutputPath>

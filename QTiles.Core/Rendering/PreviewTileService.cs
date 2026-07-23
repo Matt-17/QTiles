@@ -42,12 +42,17 @@ public sealed class PreviewTileService
         this.tileImageRenderer = tileImageRenderer;
     }
 
+    // Upper bound on preview tiles per redraw. Without it an unclamped zoom level over a
+    // large area can enumerate millions of tiles and freeze the UI thread.
+    public const int MaxPreviewTiles = 1024;
+
     public IReadOnlyList<TileCoord> GetVisibleTiles(
         PreviewTileViewport viewport,
         int minZoom,
         int maxZoom,
         int tileSize,
-        bool limitToZoomRange = true)
+        bool limitToZoomRange = true,
+        GeoBounds? contentBounds = null)
     {
         if (!IsFinitePositive(viewport.Width)
             || !IsFinitePositive(viewport.Height)
@@ -75,7 +80,26 @@ public sealed class PreviewTileService
         var minTileY = ClampTile((int)Math.Floor((WebMercatorHalfWorld - maxWorldY) / (tileSize * resolution)), maxTile);
         var maxTileY = ClampTile((int)Math.Floor((WebMercatorHalfWorld - minWorldY) / (tileSize * resolution)), maxTile);
 
-        var tiles = new List<TileCoord>((maxTileX - minTileX + 1) * (maxTileY - minTileY + 1));
+        if (contentBounds is { } bounds)
+        {
+            var contentRange = TileMath.BoundsToTileRange(bounds, zoomLevel);
+            minTileX = Math.Max(minTileX, contentRange.MinX);
+            maxTileX = Math.Min(maxTileX, contentRange.MaxX);
+            minTileY = Math.Max(minTileY, contentRange.MinY);
+            maxTileY = Math.Min(maxTileY, contentRange.MaxY);
+            if (minTileX > maxTileX || minTileY > maxTileY)
+            {
+                return [];
+            }
+        }
+
+        var totalTiles = (long)(maxTileX - minTileX + 1) * (maxTileY - minTileY + 1);
+        if (totalTiles > MaxPreviewTiles)
+        {
+            return EnumerateCenteredTiles(zoomLevel, minTileX, maxTileX, minTileY, maxTileY, viewport, tileSize, resolution);
+        }
+
+        var tiles = new List<TileCoord>((int)totalTiles);
         for (var x = minTileX; x <= maxTileX; x++)
         {
             for (var y = minTileY; y <= maxTileY; y++)
@@ -85,6 +109,43 @@ public sealed class PreviewTileService
         }
 
         return tiles;
+    }
+
+    private static IReadOnlyList<TileCoord> EnumerateCenteredTiles(
+        int zoomLevel,
+        int minTileX,
+        int maxTileX,
+        int minTileY,
+        int maxTileY,
+        PreviewTileViewport viewport,
+        int tileSize,
+        double resolution)
+    {
+        // Over the cap: keep the tiles closest to the viewport center so the visible
+        // middle of the map fills in first and the overall count stays bounded.
+        var centerTileX = Math.Clamp((viewport.CenterX + WebMercatorHalfWorld) / (tileSize * resolution), minTileX, maxTileX);
+        var centerTileY = Math.Clamp((WebMercatorHalfWorld - viewport.CenterY) / (tileSize * resolution), minTileY, maxTileY);
+        var candidates = new List<(double DistanceSquared, TileCoord Tile)>();
+        var radius = (int)Math.Ceiling(Math.Sqrt(MaxPreviewTiles)) + 1;
+        var xStart = Math.Max(minTileX, (int)centerTileX - radius);
+        var xEnd = Math.Min(maxTileX, (int)centerTileX + radius);
+        var yStart = Math.Max(minTileY, (int)centerTileY - radius);
+        var yEnd = Math.Min(maxTileY, (int)centerTileY + radius);
+        for (var x = xStart; x <= xEnd; x++)
+        {
+            for (var y = yStart; y <= yEnd; y++)
+            {
+                var dx = x + 0.5 - centerTileX;
+                var dy = y + 0.5 - centerTileY;
+                candidates.Add((dx * dx + dy * dy, new TileCoord(zoomLevel, x, y)));
+            }
+        }
+
+        return candidates
+            .OrderBy(candidate => candidate.DistanceSquared)
+            .Take(MaxPreviewTiles)
+            .Select(candidate => candidate.Tile)
+            .ToList();
     }
 
     public PreviewTileWorkItem CreateWorkItem(

@@ -336,6 +336,64 @@ public sealed class ValidationTests
         Assert.IsTrue(messages.Any(message => message.Code == "source-opacity"));
     }
 
+    [TestMethod]
+    public void Validator_ManualZoom_OutsideSupportedRange_IsError()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        File.WriteAllText(source, "placeholder");
+        var project = new QTilesProject
+        {
+            BaseDirectory = temp.Path,
+            Source = new SourceConfig { Image = source },
+            Georeference = ValidGeoreference(),
+            Render = new RenderConfig { AutoZoom = false, MinZoom = 0, MaxZoom = 32 }
+        };
+
+        var messages = new ProjectValidator().Validate(project);
+
+        Assert.IsTrue(messages.Any(message => message.Code == "zoom-bounds"));
+    }
+
+    [TestMethod]
+    public void Validator_NegativeManualZoom_IsError()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        File.WriteAllText(source, "placeholder");
+        var project = new QTilesProject
+        {
+            BaseDirectory = temp.Path,
+            Source = new SourceConfig { Image = source },
+            Georeference = ValidGeoreference(),
+            Render = new RenderConfig { AutoZoom = false, MinZoom = -1, MaxZoom = 5 }
+        };
+
+        var messages = new ProjectValidator().Validate(project);
+
+        Assert.IsTrue(messages.Any(message => message.Code == "zoom-bounds"));
+    }
+
+    [TestMethod]
+    public void Validator_UnknownTransformType_IsError()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        File.WriteAllText(source, "placeholder");
+        var georeference = ValidGeoreference();
+        georeference.Transform.Type = "similarty";
+        var project = new QTilesProject
+        {
+            BaseDirectory = temp.Path,
+            Source = new SourceConfig { Image = source },
+            Georeference = georeference
+        };
+
+        var messages = new ProjectValidator().Validate(project);
+
+        Assert.IsTrue(messages.Any(message => message.Code == "transform-type"));
+    }
+
     private static GeoreferenceConfig ValidGeoreference() => new()
     {
         ControlPoints =
@@ -397,6 +455,25 @@ public sealed class RendererTests
         var json = await File.ReadAllTextAsync(project.Output.TileJsonPath);
         StringAssert.Contains(json, "\"tilejson\": \"3.0.0\"");
         StringAssert.Contains(json, "\"minzoom\": 0");
+    }
+
+    [TestMethod]
+    public async Task Renderer_TileJson_JpegFormat_UsesJpgExtensionInTileTemplate()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "sample.png");
+        await File.WriteAllTextAsync(source, "placeholder");
+        var writer = new RecordingTileWriter();
+        var renderer = new TileRenderer(new FixedImageInfoReader(256, 256), writer, new(), new());
+        var project = Project(source, temp.Path);
+        project.Render.Format = "jpeg";
+
+        await renderer.RenderAsync(project, null, CancellationToken.None);
+
+        Assert.IsTrue(writer.Paths.Any(p => p.EndsWith(Path.Combine("0", "0", "0.jpg"))));
+        var json = await File.ReadAllTextAsync(project.Output.TileJsonPath);
+        StringAssert.Contains(json, "{y}.jpg");
+        Assert.IsFalse(json.Contains("{y}.jpeg"));
     }
 
     [TestMethod]

@@ -63,6 +63,13 @@ public static class CliApplication
 
 internal sealed class ArgumentReader
 {
+    // Flags that never take a value. Without this list, "--overwrite map.yaml"
+    // would swallow the project path as the flag's value.
+    private static readonly HashSet<string> BooleanFlags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "json", "verbose", "overwrite", "no-tilejson"
+    };
+
     private readonly Queue<string> args;
 
     public ArgumentReader(IEnumerable<string> args) => this.args = new Queue<string>(args);
@@ -77,7 +84,14 @@ internal sealed class ArgumentReader
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
                 var key = arg[2..];
-                if (args.TryPeek(out var next) && !next.StartsWith("-", StringComparison.Ordinal))
+                var separatorIndex = key.IndexOf('=');
+                if (separatorIndex >= 0)
+                {
+                    Options[key[..separatorIndex]] = key[(separatorIndex + 1)..];
+                }
+                else if (!BooleanFlags.Contains(key)
+                    && args.TryPeek(out var next)
+                    && !next.StartsWith("-", StringComparison.Ordinal))
                 {
                     Options[key] = args.Dequeue();
                 }
@@ -90,11 +104,30 @@ internal sealed class ArgumentReader
             {
                 ProjectPath = arg;
             }
+            else
+            {
+                throw new InvalidOperationException($"Unexpected argument: {arg}");
+            }
         }
     }
 
     public string? Get(string name) => Options.TryGetValue(name, out var value) ? value : null;
     public bool Has(string name) => Options.ContainsKey(name);
+
+    public int? GetInt(string name)
+    {
+        if (!Options.TryGetValue(name, out var value))
+        {
+            return null;
+        }
+
+        if (value is null || !int.TryParse(value, out var parsed))
+        {
+            throw new InvalidOperationException($"--{name} requires an integer value.");
+        }
+
+        return parsed;
+    }
 }
 
 public static class InitCommand
@@ -109,7 +142,14 @@ public static class InitCommand
             throw new FileNotFoundException($"Source image does not exist: {image}", image);
         }
 
-        var hasZoomOverride = reader.Has("min-zoom") || reader.Has("max-zoom");
+        var minZoom = reader.GetInt("min-zoom");
+        var maxZoom = reader.GetInt("max-zoom");
+        if ((minZoom is null) != (maxZoom is null))
+        {
+            throw new InvalidOperationException("--min-zoom and --max-zoom must be used together.");
+        }
+
+        var hasZoomOverride = minZoom is not null;
         var project = new QTilesProject
         {
             Project = new ProjectInfo { Name = reader.Get("name") ?? Path.GetFileNameWithoutExtension(image) },
@@ -117,8 +157,8 @@ public static class InitCommand
             Render = new RenderConfig
             {
                 AutoZoom = !hasZoomOverride,
-                MinZoom = int.TryParse(reader.Get("min-zoom"), out var minZoom) ? minZoom : 0,
-                MaxZoom = int.TryParse(reader.Get("max-zoom"), out var maxZoom) ? maxZoom : 0,
+                MinZoom = minZoom ?? 0,
+                MaxZoom = maxZoom ?? 0,
                 Format = reader.Get("format") ?? "png"
             }
         };
@@ -230,20 +270,22 @@ public static class RenderCommand
             project.Output.TileJsonPath = "";
         }
 
-        if (int.TryParse(reader.Get("min-zoom"), out var minZoom))
+        var minZoom = reader.GetInt("min-zoom");
+        var maxZoom = reader.GetInt("max-zoom");
+        if (minZoom is not null || maxZoom is not null)
         {
-            project.Render.MinZoom = minZoom;
-            project.Render.AutoZoom = false;
-        }
+            if (ZoomRangeCalculator.UsesAutoZoom(project.Render) && (minZoom is null || maxZoom is null))
+            {
+                throw new InvalidOperationException("Overriding the zoom range of an auto-zoom project requires both --min-zoom and --max-zoom.");
+            }
 
-        if (int.TryParse(reader.Get("max-zoom"), out var maxZoom))
-        {
-            project.Render.MaxZoom = maxZoom;
+            project.Render.MinZoom = minZoom ?? project.Render.MinZoom;
+            project.Render.MaxZoom = maxZoom ?? project.Render.MaxZoom;
             project.Render.AutoZoom = false;
         }
 
         if (reader.Get("format") is { } format) project.Render.Format = format;
-        if (int.TryParse(reader.Get("quality"), out var quality)) project.Render.Quality = quality;
+        if (reader.GetInt("quality") is { } quality) project.Render.Quality = quality;
         if (reader.Get("resampling") is { } resampling) project.Render.Resampling = resampling;
         if (reader.Has("overwrite")) project.Render.Overwrite = true;
         if (reader.Has("no-tilejson")) project.Output.TileJson = false;
@@ -285,7 +327,13 @@ public static class EditorCommand
             return 2;
         }
 
-        Process.Start(new ProcessStartInfo(editorDll, projectPath) { UseShellExecute = true });
+        var startInfo = new ProcessStartInfo(editorDll) { UseShellExecute = true };
+        if (projectPath.Length > 0)
+        {
+            startInfo.ArgumentList.Add(projectPath);
+        }
+
+        Process.Start(startInfo);
         return 0;
     }
 }

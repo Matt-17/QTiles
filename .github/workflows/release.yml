@@ -152,5 +152,6 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.resolve_version.outputs.version }}"
-          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/QTiles-$version-x64.msi|x64|machine"
+          # The MSI is Scope="perUser" (Package.wxs), so the winget manifest must declare user scope.
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/QTiles-$version-x64.msi|x64|user"
           .\wingetcreate.exe update Code-iX.QTiles --urls $installerUrl --version $version --submit --no-open --prtitle "Update Code-iX.QTiles to $version"

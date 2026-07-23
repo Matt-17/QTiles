@@ -47,6 +47,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool isViewSyncEnabled = true;
     private bool usesExplicitSources;
     private bool isLoadingControlPoints;
+    private bool suppressPointSolve;
     private string renderSummaryText = "No render yet";
     private CancellationTokenSource? renderCancellation;
     private EditorSettings editorSettings = new();
@@ -556,7 +557,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         if (args.FirstOrDefault() is { Length: > 0 } path && File.Exists(path))
         {
-            await LoadAsync(path);
+            try
+            {
+                await LoadAsync(path);
+            }
+            catch (Exception ex)
+            {
+                Status = $"Open failed: {ex.Message}";
+                ShowError("Open failed", ex.Message);
+            }
         }
     }
 
@@ -742,19 +751,43 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public void MoveImagePoint(ControlPointViewModel point, double imageX, double imageY)
     {
-        point.ImageX = imageX;
-        point.ImageY = imageY;
-        SelectedPoint = point;
+        suppressPointSolve = true;
+        try
+        {
+            point.ImageX = imageX;
+            point.ImageY = imageY;
+            SelectedPoint = point;
+        }
+        finally
+        {
+            suppressPointSolve = false;
+        }
+
         ValidateAndSolve();
     }
 
     public void MoveWorldPoint(ControlPointViewModel point, double lon, double lat)
     {
-        point.Longitude = lon;
-        point.Latitude = lat;
-        SelectedPoint = point;
+        suppressPointSolve = true;
+        try
+        {
+            point.Longitude = lon;
+            point.Latitude = lat;
+            SelectedPoint = point;
+        }
+        finally
+        {
+            suppressPointSolve = false;
+        }
+
         ValidateAndSolve();
     }
+
+    // Suppresses per-property solving while a marker drag continuously updates
+    // coordinates; the drag handlers solve once on mouse-up via Move*Point.
+    public void BeginPointDrag() => suppressPointSolve = true;
+
+    public void EndPointDrag() => suppressPointSolve = false;
 
     public void DeletePoint(ControlPointViewModel point)
     {
@@ -1110,6 +1143,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             RenderSummaryText = "Render cancelled";
             Status = "Render cancelled";
+        }
+        catch (Exception ex)
+        {
+            RenderSummaryText = "Render failed";
+            Status = $"Render failed: {ex.Message}";
+            ShowError("Render failed", ex.Message);
         }
         finally
         {
@@ -1513,6 +1552,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             MarkDirty();
         }
 
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            // Reset (e.g. Clear) carries no OldItems, so drop every tracked handler
+            // and resubscribe whatever is currently in the collection.
+            foreach (var (point, handler) in pointHandlers)
+            {
+                point.PropertyChanged -= handler;
+            }
+
+            pointHandlers.Clear();
+            foreach (var point in ControlPoints)
+            {
+                SubscribePoint(point);
+            }
+
+            return;
+        }
+
         if (e.OldItems is not null)
         {
             foreach (ControlPointViewModel point in e.OldItems)
@@ -1550,7 +1607,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             }
 
             MarkDirty();
-            if (e.PropertyName is nameof(ControlPointViewModel.IsLocked))
+            if (suppressPointSolve || e.PropertyName is nameof(ControlPointViewModel.IsLocked))
             {
                 return;
             }
@@ -1625,6 +1682,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private void SourcesOnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         MarkDirty();
+
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            // Reset (e.g. Clear) carries no OldItems, so drop every tracked handler
+            // and resubscribe whatever is currently in the collection.
+            foreach (var (source, handler) in sourceHandlers)
+            {
+                source.PropertyChanged -= handler;
+            }
+
+            sourceHandlers.Clear();
+            foreach (var source in Sources)
+            {
+                SubscribeSource(source);
+            }
+
+            OnPropertyChanged(nameof(CanRemoveSelectedSource));
+            removeSourceCommand.RaiseCanExecuteChanged();
+            return;
+        }
 
         if (e.OldItems is not null)
         {

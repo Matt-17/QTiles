@@ -102,7 +102,28 @@ public sealed class NetVipsTileRenderer : IRenderedTileWriter, ITileImageRendere
             return false;
         }
 
-        await File.WriteAllBytesAsync(path, tile.Bytes, cancellationToken);
+        // Write via temp file + rename so a cancelled or crashed run never leaves a
+        // truncated tile behind that a later overwrite:false resume would skip.
+        var tempPath = path + ".tmp";
+        try
+        {
+            await File.WriteAllBytesAsync(tempPath, tile.Bytes, cancellationToken);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch (IOException)
+                {
+                }
+            }
+        }
+
         return true;
     }
 
@@ -213,7 +234,7 @@ public sealed class NetVipsTileRenderer : IRenderedTileWriter, ITileImageRendere
         };
         var odx = (transform.C * scale - tile.X * tileSize) * oversampleFactor;
         var ody = (transform.F * scale - tile.Y * tileSize) * oversampleFactor;
-        var interpolator = Interpolate.NewFromName(RenderResampling.ToVipsInterpolatorName(options.Resampling));
+        using var interpolator = Interpolate.NewFromName(RenderResampling.ToVipsInterpolatorName(options.Resampling));
 
         return source.Affine(
             matrix,
@@ -233,7 +254,13 @@ public sealed class NetVipsTileRenderer : IRenderedTileWriter, ITileImageRendere
 
     private static Image EnsureAlpha(Image source)
     {
-        var srgb = source.Bands is 3 or 4 ? source : source.Colourspace(Enums.Interpretation.Srgb);
+        // Band count alone is not enough to decide whether a conversion is needed:
+        // CMYK sources have 4 bands but are not RGBA, and 16-bit sources (Rgb16/Grey16)
+        // need a depth conversion before a 0-255 alpha band makes sense.
+        using var srgb = source.Interpretation == Enums.Interpretation.Srgb && source.Format == Enums.BandFormat.Uchar
+            ? source.Copy()
+            : source.Colourspace(Enums.Interpretation.Srgb);
+
         if (srgb.Bands == 4)
         {
             return srgb.Copy();
@@ -250,7 +277,8 @@ public sealed class NetVipsTileRenderer : IRenderedTileWriter, ITileImageRendere
             return rgb.Bandjoin([255.0]);
         }
 
-        return srgb.Colourspace(Enums.Interpretation.Srgb).Bandjoin([255.0]);
+        using var expanded = srgb.Colourspace(Enums.Interpretation.Srgb);
+        return expanded.Bandjoin([255.0]);
     }
 
     private static Image ApplyOpacity(Image image, double opacity)
