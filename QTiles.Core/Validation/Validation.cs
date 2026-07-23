@@ -136,9 +136,15 @@ public sealed class ProjectValidator
 
         foreach (var point in enabled)
         {
-            if (point.World.Lon is < -180 or > 180 || point.World.Lat is < -90 or > 90)
+            // Negated range checks so NaN (which compares false to everything) is rejected too.
+            if (!(point.World.Lon is >= -180 and <= 180) || !(point.World.Lat is >= -90 and <= 90))
             {
                 messages.Add(Error("lon-lat", $"Source {sourceName} control point {point.Id} has invalid lon/lat."));
+            }
+
+            if (!double.IsFinite(point.Image.X) || !double.IsFinite(point.Image.Y))
+            {
+                messages.Add(Error("image-point", $"Source {sourceName} control point {point.Id} has invalid image coordinates."));
             }
         }
     }

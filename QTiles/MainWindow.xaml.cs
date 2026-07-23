@@ -130,8 +130,10 @@ public partial class MainWindow : Window
         viewModel.ControlPoints.CollectionChanged += ControlPointsOnCollectionChanged;
         ImageOverlay.MouseMove += OverlayOnMouseMove;
         ImageOverlay.MouseLeftButtonUp += OverlayOnMouseLeftButtonUp;
+        ImageOverlay.LostMouseCapture += OverlayOnLostMouseCapture;
         WorldOverlay.MouseMove += OverlayOnMouseMove;
         WorldOverlay.MouseLeftButtonUp += OverlayOnMouseLeftButtonUp;
+        WorldOverlay.LostMouseCapture += OverlayOnLostMouseCapture;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -174,6 +176,24 @@ public partial class MainWindow : Window
 
     private void OnClosing(object? sender, CancelEventArgs e)
     {
+        if (!forceClose && viewModel.IsRendering)
+        {
+            var renderResult = MessageBox.Show(
+                this,
+                "A render is still running. Cancel it and close?",
+                "Render in progress",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (renderResult != MessageBoxResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
+
+            viewModel.CancelRunningRender();
+        }
+
         if (!forceClose && viewModel.HasUnsavedChanges)
         {
             var result = MessageBox.Show(
@@ -581,11 +601,17 @@ public partial class MainWindow : Window
                 return;
             }
 
+            // Load via stream, not UriSource: Uri mangles paths containing '#' or '%'.
             var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.UriSource = new Uri(path, UriKind.Absolute);
-            bitmap.EndInit();
+            using (var stream = File.OpenRead(path))
+            {
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.StreamSource = stream;
+                bitmap.EndInit();
+            }
+
+            bitmap.Freeze();
             SourceImageElement.Source = bitmap;
             imagePixelWidth = bitmap.PixelWidth;
             imagePixelHeight = bitmap.PixelHeight;
@@ -761,6 +787,13 @@ public partial class MainWindow : Window
         CompleteMarkerDrag();
     }
 
+    private void OverlayOnLostMouseCapture(object sender, MouseEventArgs e)
+    {
+        // If something steals the capture mid-drag (context menu, Alt-Tab), finish the
+        // drag here — otherwise draggedPoint and the solve suppression stay stranded.
+        CompleteMarkerDrag();
+    }
+
     private void CompleteMarkerDrag()
     {
         if (draggedPoint is null || draggedPane is null)
@@ -768,20 +801,25 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Clear the drag state before releasing capture: ReleaseMouseCapture raises
+        // LostMouseCapture, which re-enters this method.
+        var point = draggedPoint;
+        var pane = draggedPane;
+        draggedPoint = null;
+        draggedPane = null;
+
         viewModel.EndPointDrag();
-        if (draggedPane == "image")
+        if (pane == "image")
         {
-            viewModel.MoveImagePoint(draggedPoint, draggedPoint.ImageX, draggedPoint.ImageY);
+            viewModel.MoveImagePoint(point, point.ImageX, point.ImageY);
             ImageOverlay.ReleaseMouseCapture();
         }
         else
         {
-            viewModel.MoveWorldPoint(draggedPoint, draggedPoint.Longitude, draggedPoint.Latitude);
+            viewModel.MoveWorldPoint(point, point.Longitude, point.Latitude);
             WorldOverlay.ReleaseMouseCapture();
         }
 
-        draggedPoint = null;
-        draggedPane = null;
         RedrawMarkers();
         RedrawPreviewOverlay();
     }
@@ -1002,9 +1040,11 @@ public partial class MainWindow : Window
         {
             await Dispatcher.InvokeAsync(() =>
             {
-                pendingPreviewTiles.Remove(workItem.Key);
+                // Only touch pending state if this task still belongs to the current
+                // preview pass; a stale task must not strip a newer pass's marker.
                 if (previewStateVersion == stateVersion)
                 {
+                    pendingPreviewTiles.Remove(workItem.Key);
                     RemovePreviewTile(workItem.RenderRequest.Tile);
                     ShowPreviewMissingStatus($"Preview failed: {ex.Message}");
                 }
@@ -1014,9 +1054,13 @@ public partial class MainWindow : Window
 
         await Dispatcher.InvokeAsync(() =>
         {
+            if (previewStateVersion != stateVersion)
+            {
+                return;
+            }
+
             pendingPreviewTiles.Remove(workItem.Key);
-            if (previewStateVersion != stateVersion
-                || !previewTileKeys.TryGetValue(workItem.RenderRequest.Tile, out var currentKey)
+            if (!previewTileKeys.TryGetValue(workItem.RenderRequest.Tile, out var currentKey)
                 || currentKey != workItem.Key)
             {
                 return;

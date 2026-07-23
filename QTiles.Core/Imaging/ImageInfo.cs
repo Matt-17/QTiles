@@ -121,6 +121,9 @@ public sealed class NetVipsTileRenderer : IRenderedTileWriter, ITileImageRendere
                 catch (IOException)
                 {
                 }
+                catch (UnauthorizedAccessException)
+                {
+                }
             }
         }
 

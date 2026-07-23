@@ -9,16 +9,36 @@ public sealed class QTilesProject
 
     public int Version { get; set; } = 1;
     public ProjectInfo Project { get; set; } = new();
+
+    // The legacy single-source fields must not be written once "sources" is used,
+    // otherwise every save persists a stale shadow copy of the georeferencing.
+    // YamlDotNet has no ShouldSerialize* convention, so the suppression is done via
+    // nullable Yaml-facing wrappers that OmitNull drops.
+    [YamlDotNet.Serialization.YamlIgnore]
     public SourceConfig Source { get; set; } = new();
+
+    [YamlDotNet.Serialization.YamlMember(Alias = "source", ApplyNamingConventions = false)]
+    public SourceConfig? YamlSource
+    {
+        get => Sources is { Count: > 0 } ? null : Source;
+        set => Source = value ?? new();
+    }
+
     public List<ProjectSourceConfig>? Sources { get; set; }
+
+    [YamlDotNet.Serialization.YamlIgnore]
     public GeoreferenceConfig Georeference { get; set; } = new();
+
+    [YamlDotNet.Serialization.YamlMember(Alias = "georeference", ApplyNamingConventions = false)]
+    public GeoreferenceConfig? YamlGeoreference
+    {
+        get => Sources is { Count: > 0 } ? null : Georeference;
+        set => Georeference = value ?? new();
+    }
+
     public RenderConfig Render { get; set; } = new();
     public OutputConfig Output { get; set; } = new();
     public EditorConfig Editor { get; set; } = new();
-
-    public bool ShouldSerializeSource() => Sources is not { Count: > 0 };
-    public bool ShouldSerializeGeoreference() => Sources is not { Count: > 0 };
-    public bool ShouldSerializeSources() => Sources is { Count: > 0 };
 }
 
 public sealed class ProjectInfo
@@ -59,8 +79,6 @@ public sealed class ProjectSourceConfig
         get => opacity;
         set => opacity = value.HasValue && !IsDefaultOpacity(value.Value) ? value : null;
     }
-
-    public bool ShouldSerializeYamlOpacity() => opacity.HasValue;
 
     private static bool IsDefaultOpacity(double value) => double.IsFinite(value) && Math.Abs(value - 1.0) <= 0.0000001;
 }

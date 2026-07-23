@@ -122,30 +122,52 @@ public sealed class PreviewTileService
         double resolution)
     {
         // Over the cap: keep the tiles closest to the viewport center so the visible
-        // middle of the map fills in first and the overall count stays bounded.
-        var centerTileX = Math.Clamp((viewport.CenterX + WebMercatorHalfWorld) / (tileSize * resolution), minTileX, maxTileX);
-        var centerTileY = Math.Clamp((WebMercatorHalfWorld - viewport.CenterY) / (tileSize * resolution), minTileY, maxTileY);
-        var candidates = new List<(double DistanceSquared, TileCoord Tile)>();
-        var radius = (int)Math.Ceiling(Math.Sqrt(MaxPreviewTiles)) + 1;
-        var xStart = Math.Max(minTileX, (int)centerTileX - radius);
-        var xEnd = Math.Min(maxTileX, (int)centerTileX + radius);
-        var yStart = Math.Max(minTileY, (int)centerTileY - radius);
-        var yEnd = Math.Min(maxTileY, (int)centerTileY + radius);
-        for (var x = xStart; x <= xEnd; x++)
+        // middle of the map fills in first and the overall count stays bounded. The
+        // rings expand independently per axis, so elongated ranges (e.g. 2 rows x
+        // 1000 columns of a panorama) still fill up to the cap instead of stopping
+        // at a square window.
+        var centerTileX = (int)Math.Clamp((viewport.CenterX + WebMercatorHalfWorld) / (tileSize * resolution), minTileX, maxTileX);
+        var centerTileY = (int)Math.Clamp((WebMercatorHalfWorld - viewport.CenterY) / (tileSize * resolution), minTileY, maxTileY);
+        var tiles = new List<TileCoord>(MaxPreviewTiles) { new(zoomLevel, centerTileX, centerTileY) };
+        var maxRing = Math.Max(
+            Math.Max(centerTileX - minTileX, maxTileX - centerTileX),
+            Math.Max(centerTileY - minTileY, maxTileY - centerTileY));
+        for (var ring = 1; ring <= maxRing && tiles.Count < MaxPreviewTiles; ring++)
         {
-            for (var y = yStart; y <= yEnd; y++)
+            var xStart = Math.Max(minTileX, centerTileX - ring);
+            var xEnd = Math.Min(maxTileX, centerTileX + ring);
+            var yTop = centerTileY - ring;
+            var yBottom = centerTileY + ring;
+            for (var x = xStart; x <= xEnd && tiles.Count < MaxPreviewTiles; x++)
             {
-                var dx = x + 0.5 - centerTileX;
-                var dy = y + 0.5 - centerTileY;
-                candidates.Add((dx * dx + dy * dy, new TileCoord(zoomLevel, x, y)));
+                if (yTop >= minTileY)
+                {
+                    tiles.Add(new TileCoord(zoomLevel, x, yTop));
+                }
+
+                if (yBottom <= maxTileY && tiles.Count < MaxPreviewTiles)
+                {
+                    tiles.Add(new TileCoord(zoomLevel, x, yBottom));
+                }
+            }
+
+            var yStart = Math.Max(minTileY, yTop + 1);
+            var yEnd = Math.Min(maxTileY, yBottom - 1);
+            for (var y = yStart; y <= yEnd && tiles.Count < MaxPreviewTiles; y++)
+            {
+                if (centerTileX - ring >= minTileX)
+                {
+                    tiles.Add(new TileCoord(zoomLevel, centerTileX - ring, y));
+                }
+
+                if (centerTileX + ring <= maxTileX && tiles.Count < MaxPreviewTiles)
+                {
+                    tiles.Add(new TileCoord(zoomLevel, centerTileX + ring, y));
+                }
             }
         }
 
-        return candidates
-            .OrderBy(candidate => candidate.DistanceSquared)
-            .Take(MaxPreviewTiles)
-            .Select(candidate => candidate.Tile)
-            .ToList();
+        return tiles;
     }
 
     public PreviewTileWorkItem CreateWorkItem(

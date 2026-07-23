@@ -9,6 +9,9 @@ namespace QTiles;
 /// </summary>
 public partial class App : Application
 {
+    private string? lastUnhandledMessage;
+    private DateTime lastUnhandledShownUtc;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -16,12 +19,25 @@ public partial class App : Application
         // so an unexpected error shows a dialog instead of killing the process.
         DispatcherUnhandledException += (_, args) =>
         {
+            args.Handled = true;
+
+            // A fault in a per-frame path (pan/zoom redraw) would otherwise re-spawn
+            // the modal dialog on every tick; show repeats of the same error at most
+            // every few seconds.
+            var message = args.Exception.Message;
+            var now = DateTime.UtcNow;
+            if (message == lastUnhandledMessage && (now - lastUnhandledShownUtc) < TimeSpan.FromSeconds(5))
+            {
+                return;
+            }
+
+            lastUnhandledMessage = message;
+            lastUnhandledShownUtc = now;
             MessageBox.Show(
-                args.Exception.Message,
+                message,
                 "Unexpected error",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
-            args.Handled = true;
         };
     }
 }

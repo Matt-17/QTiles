@@ -27,11 +27,21 @@ public static class TileMath
         int zoom)
     {
         var limit = (1 << zoom) - 1;
-        var xMin = ClampTile((int)Math.Floor(minX * (1 << zoom)), limit);
-        var yMin = ClampTile((int)Math.Floor(minY * (1 << zoom)), limit);
-        var xMax = ClampTile((int)Math.Floor(maxX * (1 << zoom)), limit);
-        var yMax = ClampTile((int)Math.Floor(maxY * (1 << zoom)), limit);
-        return new TileRange(zoom, Math.Min(xMin, xMax), Math.Min(yMin, yMax), Math.Max(xMin, xMax), Math.Max(yMin, yMax));
+        var xMin = ClampTile((int)Math.Floor(Math.Min(minX, maxX) * (1 << zoom)), limit);
+        var yMin = ClampTile((int)Math.Floor(Math.Min(minY, maxY) * (1 << zoom)), limit);
+        // Treat the max edge exclusively: bounds ending exactly on a tile boundary must
+        // not pull in an extra zero-coverage row/column. Zero-area bounds still map to
+        // the single tile containing the edge (xMax/yMax never drop below xMin/yMin).
+        var xMax = Math.Max(xMin, ClampTile(ExclusiveMaxTile(Math.Max(minX, maxX), zoom), limit));
+        var yMax = Math.Max(yMin, ClampTile(ExclusiveMaxTile(Math.Max(minY, maxY), zoom), limit));
+        return new TileRange(zoom, xMin, yMin, xMax, yMax);
+    }
+
+    private static int ExclusiveMaxTile(double max, int zoom)
+    {
+        var scaled = max * (1 << zoom);
+        var floor = (int)Math.Floor(scaled);
+        return scaled == floor ? floor - 1 : floor;
     }
 
     private static int ClampTile(int value, int limit) => Math.Clamp(value, 0, limit);

@@ -137,6 +137,44 @@ public sealed class CliTests
     }
 
     [TestMethod]
+    public async Task Cli_Validate_LegacyZoom24Project_IsClampedInsteadOfInvalid()
+    {
+        using var temp = new TempFolder();
+        var image = Path.Combine(temp.Path, "sample.png");
+        await CreateImageAsync(image);
+        var yaml = Path.Combine(temp.Path, "qtiles.yaml");
+        var project = SolvableProject(image);
+        project.Render.AutoZoom = false;
+        project.Render.MinZoom = 0;
+        project.Render.MaxZoom = 24;
+        await new QTilesYamlSerializer().WriteAsync(project, yaml);
+
+        var exitCode = await CliApplication.RunAsync(["validate", yaml], CancellationToken.None);
+
+        Assert.AreEqual(0, exitCode);
+    }
+
+    [TestMethod]
+    public async Task Cli_Render_MaxZoomAloneOnAutoZoomProject_Works()
+    {
+        using var temp = new TempFolder();
+        var image = Path.Combine(temp.Path, "sample.png");
+        WriteRgbSource(image);
+        var yaml = Path.Combine(temp.Path, "qtiles.yaml");
+        var project = SolvableProject(image);
+        project.Render.TileSize = 2;
+        project.Render.Resampling = "nearest";
+        project.Output.Directory = Path.Combine(temp.Path, "tiles");
+        project.Output.TileJsonPath = Path.Combine(temp.Path, "tiles", "tilejson.json");
+        await new QTilesYamlSerializer().WriteAsync(project, yaml);
+
+        var exitCode = await CliApplication.RunAsync(["render", yaml, "--max-zoom", "0"], CancellationToken.None);
+
+        Assert.AreEqual(0, exitCode);
+        Assert.IsTrue(File.Exists(Path.Combine(project.Output.Directory, "0", "0", "0.png")));
+    }
+
+    [TestMethod]
     public async Task Cli_Init_MinZoomWithoutMaxZoom_Fails()
     {
         using var temp = new TempFolder();

@@ -48,6 +48,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool usesExplicitSources;
     private bool isLoadingControlPoints;
     private bool suppressPointSolve;
+    private long dirtyGeneration;
     private string renderSummaryText = "No render yet";
     private CancellationTokenSource? renderCancellation;
     private EditorSettings editorSettings = new();
@@ -555,17 +556,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public async Task LoadStartupProjectAsync(string[] args)
     {
-        if (args.FirstOrDefault() is { Length: > 0 } path && File.Exists(path))
+        if (args.FirstOrDefault() is not { Length: > 0 } path || !File.Exists(path))
         {
-            try
-            {
-                await LoadAsync(path);
-            }
-            catch (Exception ex)
-            {
-                Status = $"Open failed: {ex.Message}";
-                ShowError("Open failed", ex.Message);
-            }
+            return;
+        }
+
+        // Route exactly like the in-app Open dialog: only .yaml/.yml goes through the
+        // project loader; anything else (e.g. an image dropped onto the exe) becomes
+        // the source image of a fresh project.
+        if (!IsProjectFile(path))
+        {
+            SetSourceImage(path);
+            return;
+        }
+
+        try
+        {
+            await LoadAsync(path);
+        }
+        catch (Exception ex)
+        {
+            Status = $"Open failed: {ex.Message}";
+            ShowError("Open failed", ex.Message);
         }
     }
 
@@ -839,9 +851,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private async Task LoadAsync(string path)
     {
         suppressDirtyTracking = true;
+        bool zoomClamped;
         try
         {
             project = await projectService.OpenAsync(path);
+            zoomClamped = ZoomRangeCalculator.ClampToSupportedRange(project.Render);
             RememberOpenDirectory(path);
             projectPath = path;
             AddRecentProject(path);
@@ -856,6 +870,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
 
         MarkClean();
+        if (zoomClamped)
+        {
+            Status = $"Zoom range was limited to 0..{ZoomRangeCalculator.MaxSupportedZoom}";
+        }
     }
 
     private async Task SaveAsync()
@@ -898,10 +916,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             project.BaseDirectory = saveDirectory;
             projectPath = savePath;
             ApplyProjectPathsToViewModels();
+            // Edits made while the save awaits below must keep the project dirty;
+            // only clear the flag when nothing changed since this snapshot.
+            var savedGeneration = dirtyGeneration;
             await projectService.SaveAsync(project, savePath);
             RememberOpenDirectory(savePath);
             AddRecentProject(savePath);
-            MarkClean();
+            if (dirtyGeneration == savedGeneration)
+            {
+                MarkClean();
+            }
             OnPropertyChanged(nameof(OutputDirectory));
             OnPropertyChanged(nameof(SourceImage));
             OnPropertyChanged(nameof(RootStatusText));
@@ -1194,12 +1218,29 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         renderCancellation.Cancel();
     }
 
+    public void CancelRunningRender() => CancelRender();
+
     private void OpenOutputFolder()
     {
         NormalizeOutputPathsForCurrentRoot();
         EnsureProjectBaseDirectory();
         var path = ResolveOutputDirectory();
-        Directory.CreateDirectory(path);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            Status = "Output directory is not set.";
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(path);
+        }
+        catch (Exception ex)
+        {
+            Status = $"Cannot open output directory: {ex.Message}";
+            return;
+        }
+
         AddRecentOutputDirectory(path);
         Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
@@ -1675,6 +1716,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         if (!suppressDirtyTracking)
         {
+            dirtyGeneration++;
             HasUnsavedChanges = true;
         }
     }

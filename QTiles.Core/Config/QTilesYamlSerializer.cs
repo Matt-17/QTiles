@@ -44,7 +44,30 @@ public sealed class QTilesYamlSerializer
             Directory.CreateDirectory(directory);
         }
 
-        await File.WriteAllTextAsync(path, Serialize(project), cancellationToken);
+        // Write via temp file + rename so a crash mid-write cannot destroy the
+        // user's project file.
+        var tempPath = path + ".tmp";
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, Serialize(project), cancellationToken);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
     }
 
     public string Serialize(QTilesProject project) => serializer.Serialize(project);

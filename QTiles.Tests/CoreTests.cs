@@ -42,6 +42,39 @@ public sealed class GeoTests
         Assert.IsTrue(range.MinY <= range.MaxY);
         TestAssert.InRange(range.MinX, 0, 1023);
     }
+
+    [TestMethod]
+    public void TileMath_MaxEdgeOnTileBoundary_DoesNotIncludeExtraColumn()
+    {
+        var range = TileMath.NormalizedBoundsToTileRange(0.25, 0.25, 0.5, 0.5, zoom: 2);
+
+        Assert.AreEqual(1, range.MinX);
+        Assert.AreEqual(1, range.MaxX);
+        Assert.AreEqual(1, range.MinY);
+        Assert.AreEqual(1, range.MaxY);
+    }
+
+    [TestMethod]
+    public void TileMath_ZeroAreaBoundsOnTileBoundary_YieldsSingleTile()
+    {
+        var range = TileMath.NormalizedBoundsToTileRange(0.5, 0.5, 0.5, 0.5, zoom: 2);
+
+        Assert.AreEqual(2, range.MinX);
+        Assert.AreEqual(2, range.MaxX);
+        Assert.AreEqual(2, range.MinY);
+        Assert.AreEqual(2, range.MaxY);
+    }
+
+    [TestMethod]
+    public void TileMath_FullWorld_StillCoversAllTiles()
+    {
+        var range = TileMath.NormalizedBoundsToTileRange(0.0, 0.0, 1.0, 1.0, zoom: 3);
+
+        Assert.AreEqual(0, range.MinX);
+        Assert.AreEqual(7, range.MaxX);
+        Assert.AreEqual(0, range.MinY);
+        Assert.AreEqual(7, range.MaxY);
+    }
 }
 
 [TestClass]
@@ -219,6 +252,49 @@ public sealed class YamlTests
     }
 
     [TestMethod]
+    public void Yaml_MultiSourceProject_DoesNotWriteLegacySourceBlocks()
+    {
+        var project = new QTilesProject
+        {
+            Source = new SourceConfig { Image = "./legacy-old.png" },
+            Georeference = new GeoreferenceConfig
+            {
+                ControlPoints = [new ControlPointConfig { Id = new ControlPointId("legacy") }]
+            },
+            Sources =
+            [
+                new ProjectSourceConfig { Id = "sheet-a", Image = "./a.png" }
+            ]
+        };
+
+        var yaml = new QTilesYamlSerializer().Serialize(project);
+        var topLevelKeys = yaml.Split('\n').Where(line => line.Length > 0 && !char.IsWhiteSpace(line[0])).ToList();
+
+        StringAssert.Contains(yaml, "sources:");
+        Assert.IsFalse(topLevelKeys.Any(line => line.StartsWith("source:", StringComparison.Ordinal)));
+        Assert.IsFalse(topLevelKeys.Any(line => line.StartsWith("georeference:", StringComparison.Ordinal)));
+        Assert.IsFalse(yaml.Contains("legacy-old.png", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void Yaml_SingleSourceProject_StillWritesLegacyBlocks()
+    {
+        var project = new QTilesProject
+        {
+            Source = new SourceConfig { Image = "./map.png" }
+        };
+        project.Georeference.ControlPoints.Add(new ControlPointConfig { Id = new ControlPointId("1") });
+
+        var yaml = new QTilesYamlSerializer().Serialize(project);
+        var roundTrip = new QTilesYamlSerializer().Deserialize(yaml);
+
+        StringAssert.Contains(yaml, "source:");
+        StringAssert.Contains(yaml, "georeference:");
+        Assert.AreEqual("./map.png", roundTrip.Source.Image);
+        Assert.AreEqual("1", roundTrip.Georeference.ControlPoints[0].Id.Value);
+    }
+
+    [TestMethod]
     public void Yaml_RoundTrip_SourceOpacity_PreservesNonDefaultAndOmitsDefault()
     {
         var project = new QTilesProject
@@ -372,6 +448,52 @@ public sealed class ValidationTests
         var messages = new ProjectValidator().Validate(project);
 
         Assert.IsTrue(messages.Any(message => message.Code == "zoom-bounds"));
+    }
+
+    [TestMethod]
+    public void Validator_NaNCoordinates_AreErrors()
+    {
+        using var temp = new TempFolder();
+        var source = Path.Combine(temp.Path, "source.png");
+        File.WriteAllText(source, "placeholder");
+        var georeference = ValidGeoreference();
+        georeference.ControlPoints[0].World.Lon = double.NaN;
+        georeference.ControlPoints[1].Image.X = double.NaN;
+        var project = new QTilesProject
+        {
+            BaseDirectory = temp.Path,
+            Source = new SourceConfig { Image = source },
+            Georeference = georeference
+        };
+
+        var messages = new ProjectValidator().Validate(project);
+
+        Assert.IsTrue(messages.Any(message => message.Code == "lon-lat"));
+        Assert.IsTrue(messages.Any(message => message.Code == "image-point"));
+    }
+
+    [TestMethod]
+    public void ZoomRangeCalculator_ClampToSupportedRange_ClampsOutOfRangeValues()
+    {
+        var render = new RenderConfig { AutoZoom = false, MinZoom = -1, MaxZoom = 24 };
+
+        var clamped = ZoomRangeCalculator.ClampToSupportedRange(render);
+
+        Assert.IsTrue(clamped);
+        Assert.AreEqual(0, render.MinZoom);
+        Assert.AreEqual(ZoomRangeCalculator.MaxSupportedZoom, render.MaxZoom);
+    }
+
+    [TestMethod]
+    public void ZoomRangeCalculator_ClampToSupportedRange_LeavesValidValues()
+    {
+        var render = new RenderConfig { AutoZoom = false, MinZoom = 2, MaxZoom = 18 };
+
+        var clamped = ZoomRangeCalculator.ClampToSupportedRange(render);
+
+        Assert.IsFalse(clamped);
+        Assert.AreEqual(2, render.MinZoom);
+        Assert.AreEqual(18, render.MaxZoom);
     }
 
     [TestMethod]
@@ -883,6 +1005,38 @@ public sealed class PreviewTileServiceTests
         Assert.IsTrue(tiles.Contains(new TileCoord(1, 0, 1)));
         Assert.IsTrue(tiles.Contains(new TileCoord(1, 1, 0)));
         Assert.IsTrue(tiles.Contains(new TileCoord(1, 1, 1)));
+    }
+
+    [TestMethod]
+    public void GetVisibleTiles_ClipsToContentBounds()
+    {
+        var service = new PreviewTileService(new RecordingTileImageRenderer());
+        var resolution = WebMercatorWorldWidth / (256 * Math.Pow(2.0, 2));
+        var viewport = new PreviewTileViewport(0, 0, 1024, 1024, resolution);
+        var contentBounds = new GeoBounds(1, 1, 44, 44);
+
+        var tiles = service.GetVisibleTiles(viewport, minZoom: 0, maxZoom: 4, tileSize: 256, limitToZoomRange: true, contentBounds);
+
+        Assert.IsTrue(tiles.Count > 0);
+        Assert.IsTrue(tiles.All(tile => tile is { X: 2, Y: 1 }));
+    }
+
+    [TestMethod]
+    public void GetVisibleTiles_ElongatedRangeOverCap_FillsUpToCapAcrossFullWidth()
+    {
+        var service = new PreviewTileService(new RecordingTileImageRenderer());
+        var zoom = 11;
+        var resolution = WebMercatorWorldWidth / (256 * Math.Pow(2.0, zoom));
+        var viewport = new PreviewTileViewport(0, 0, 256 * Math.Pow(2.0, zoom), 512, resolution);
+        var thinFullWidthBounds = new GeoBounds(-179.999, -0.01, 179.999, 0.01);
+
+        var tiles = service.GetVisibleTiles(viewport, zoom, zoom, tileSize: 256, limitToZoomRange: true, thinFullWidthBounds);
+
+        Assert.AreEqual(PreviewTileService.MaxPreviewTiles, tiles.Count);
+        Assert.AreEqual(tiles.Count, tiles.Distinct().Count());
+        // The old square-window logic stopped ~33 columns from the center; the ring
+        // expansion must spread across far more columns for a 2-row strip.
+        Assert.IsTrue(tiles.Select(tile => tile.X).Distinct().Count() > 100);
     }
 
     [TestMethod]

@@ -194,7 +194,17 @@ public static class ValidateCommand
         var reader = new ArgumentReader(args);
         reader.Parse();
         var path = reader.ProjectPath ?? throw new InvalidOperationException("Project YAML path is required.");
-        return (await new QTilesYamlSerializer().ReadAsync(path, cancellationToken), path, reader.Has("json"));
+        var project = await new QTilesYamlSerializer().ReadAsync(path, cancellationToken);
+        WarnIfZoomClamped(project);
+        return (project, path, reader.Has("json"));
+    }
+
+    internal static void WarnIfZoomClamped(QTilesProject project)
+    {
+        if (ZoomRangeCalculator.ClampToSupportedRange(project.Render))
+        {
+            Console.Error.WriteLine($"Warning: zoom range was limited to 0..{ZoomRangeCalculator.MaxSupportedZoom}.");
+        }
     }
 }
 
@@ -237,6 +247,7 @@ public static class RenderCommand
         reader.Parse();
         var path = reader.ProjectPath ?? throw new InvalidOperationException("Project YAML path is required.");
         var project = await new QTilesYamlSerializer().ReadAsync(path, cancellationToken);
+        ValidateCommand.WarnIfZoomClamped(project);
         ApplyOverrides(project, reader);
         var summary = await new TileRenderer().RenderAsync(project, new Progress<TileRenderProgress>(p =>
         {
@@ -274,12 +285,14 @@ public static class RenderCommand
         var maxZoom = reader.GetInt("max-zoom");
         if (minZoom is not null || maxZoom is not null)
         {
-            if (ZoomRangeCalculator.UsesAutoZoom(project.Render) && (minZoom is null || maxZoom is null))
+            // On an auto-zoom project the stored MinZoom/MaxZoom are meaningless (0/0):
+            // --max-zoom alone renders 0..N, but --min-zoom alone would leave MaxZoom at 0.
+            if (ZoomRangeCalculator.UsesAutoZoom(project.Render) && minZoom is not null && maxZoom is null)
             {
-                throw new InvalidOperationException("Overriding the zoom range of an auto-zoom project requires both --min-zoom and --max-zoom.");
+                throw new InvalidOperationException("Overriding --min-zoom on an auto-zoom project also requires --max-zoom.");
             }
 
-            project.Render.MinZoom = minZoom ?? project.Render.MinZoom;
+            project.Render.MinZoom = minZoom ?? (ZoomRangeCalculator.UsesAutoZoom(project.Render) ? 0 : project.Render.MinZoom);
             project.Render.MaxZoom = maxZoom ?? project.Render.MaxZoom;
             project.Render.AutoZoom = false;
         }
@@ -300,6 +313,7 @@ public static class TileJsonCommand
         reader.Parse();
         var path = reader.ProjectPath ?? throw new InvalidOperationException("Project YAML path is required.");
         var project = await new QTilesYamlSerializer().ReadAsync(path, cancellationToken);
+        ValidateCommand.WarnIfZoomClamped(project);
         var plan = new ProjectRenderPlanner().CreatePlan(project);
         var summary = new RenderSummary(0, 0, plan.ZoomRange.MinZoom, plan.ZoomRange.MaxZoom, plan.Bounds, TimeSpan.Zero);
         var tileJsonPath = TileJsonWriter.ResolvePath(project);

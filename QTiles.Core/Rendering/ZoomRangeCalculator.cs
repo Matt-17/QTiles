@@ -15,6 +15,25 @@ public static class ZoomRangeCalculator
     public static bool UsesAutoZoom(RenderConfig render) =>
         render.AutoZoom ?? (render.MinZoom == 0 && render.MaxZoom == 0);
 
+    /// <summary>
+    /// Clamps manual zoom values into [0, MaxSupportedZoom] so projects written by
+    /// older versions (which allowed up to 24) keep loading instead of failing
+    /// validation. Returns true when a value was adjusted.
+    /// </summary>
+    public static bool ClampToSupportedRange(RenderConfig render)
+    {
+        var clampedMin = Math.Clamp(render.MinZoom, 0, MaxSupportedZoom);
+        var clampedMax = Math.Clamp(render.MaxZoom, 0, MaxSupportedZoom);
+        if (clampedMin == render.MinZoom && clampedMax == render.MaxZoom)
+        {
+            return false;
+        }
+
+        render.MinZoom = clampedMin;
+        render.MaxZoom = clampedMax;
+        return true;
+    }
+
     public static ZoomRangeRecommendation Resolve(
         RenderConfig render,
         TransformSolveResult solveResult,
