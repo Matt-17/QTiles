@@ -152,6 +152,19 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.resolve_version.outputs.version }}"
-          # The MSI is Scope="perUser" (Package.wxs), so the winget manifest must declare user scope.
-          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/QTiles-$version-x64.msi|x64|user"
-          .\wingetcreate.exe update Code-iX.QTiles --urls $installerUrl --version $version --submit --no-open --prtitle "Update Code-iX.QTiles to $version"
+          # Deliberately no scope suffix on the URL. The MSI is Scope="perUser" (Package.wxs), but
+          # Windows Installer registers it under HKLM on administrator accounts and under HKCU
+          # otherwise, so no fixed Scope value matches every install. winget derives the installed
+          # scope from that registry hive and filters out mismatching installers, which makes
+          # "winget upgrade" fail with 0x8a15002b. Leaving Scope unset disables that filter.
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/QTiles-$version-x64.msi|x64"
+          .\wingetcreate.exe update Code-iX.QTiles --urls $installerUrl --version $version --out winget-manifests --no-open
+          $installerManifest = Get-ChildItem winget-manifests -Recurse -Filter "*.installer.yaml" | Select-Object -First 1
+          if (-not $installerManifest) {
+            throw "wingetcreate did not produce an installer manifest."
+          }
+          # wingetcreate carries root-level fields over from the previous version, so an inherited
+          # "Scope: user" survives even though --urls no longer sets one. Strip it explicitly.
+          $lines = Get-Content $installerManifest.FullName | Where-Object { $_ -notmatch "^Scope:" }
+          Set-Content -Path $installerManifest.FullName -Value $lines -Encoding utf8
+          .\wingetcreate.exe submit --prtitle "Update Code-iX.QTiles to $version" $installerManifest.Directory.FullName
